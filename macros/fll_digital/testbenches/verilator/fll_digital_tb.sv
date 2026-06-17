@@ -83,6 +83,14 @@ module fll_digital_tb;
     end
   endtask
 
+  // Waveform dump (FST for gtkwave/surfer). File lands in the dir the binary is run
+  // from (the Makefile runs it from testbenches/verilator/). View with:
+  //   make sim-view-verilator
+  initial begin
+    $dumpfile("fll_digital_tb.fst");
+    $dumpvars(0, fll_digital_tb);
+  end
+
   // Watchdog
   initial begin
     #2_000_000;  // 2 ms sim time

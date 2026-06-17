@@ -71,14 +71,19 @@ sim-gl-cocotb: ## Run gate-level simulation of CELL cell with cocotb (usage: mak
 	cd $(COCOTB_DIR) && GL=1 python3 $(CELL)_tb.py
 .PHONY: sim-gl-cocotb
 
-sim-rtl-verilator: ## Run the Verilator TB (fll_digital + behavioral ring-oscillator model)
+sim-rtl-verilator: ## Run the Verilator TB (fll_digital + behavioral ring-oscillator model); dumps FST
 	verilator --binary --timing -Wno-fatal --timescale-override 1ns/1ps \
+		--trace-fst --trace-structs \
 		-I$(SRC_DIR) --top-module fll_digital_tb \
 		--Mdir $(VERILATOR_TB_DIR)/obj_dir -o Vfll_digital_tb \
 		$(SRC_DIR)/constants.sv $(MODULES_SYNTH) $(RO_MODEL) \
 		$(VERILATOR_TB_DIR)/fll_digital_tb.sv
-	$(VERILATOR_TB_DIR)/obj_dir/Vfll_digital_tb
+	cd $(VERILATOR_TB_DIR) && obj_dir/Vfll_digital_tb
 .PHONY: sim-rtl-verilator
+
+sim-view-verilator: ## Open the Verilator TB waveform (usage: make sim-view-verilator [WAVEFORM_VIEWER=<gtkwave|surfer>]); needs a display (host or noVNC :1)
+	$(WAVEFORM_VIEWER) $(VERILATOR_TB_DIR)/fll_digital_tb.fst
+.PHONY: sim-view-verilator
 
 sim-view-cocotb: ## View CELL cell cocotb simulation waveforms (usage: make sim-view-cocotb [CELL=<cellname>] [WAVEFORM_VIEWER=<gtkwave|surfer>])
 	$(WAVEFORM_VIEWER) $(COCOTB_DIR)/sim_build/$(CELL).fst
