@@ -1,0 +1,36 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Ring-oscillator characterization: sweep an IDEAL bias current and measure the
+** oscillation frequency. (The real DAC replaces this ideal source later.)
+** ihp-sg13g2, schematic-level, SPICE-only.
+
+.lib cornerMOSlv.lib mos_tt
+
+.include ../../spice/ring_oscillator.spice
+
+.param VDDV=1.5
+
+* Supply ramps from 0 -> VDDV over 0.2us to guarantee oscillator start-up.
+VDD VDD 0 PWL(0 0 0.2u {VDDV})
+VSS VSS 0 0
+
+* Ideal bias current injected into 'nbias' (stands in for the DAC).
+Iref VDD nbias DC 8u
+
+Xro VDD VSS nbias clk ring_oscillator
+
+.control
+  set wr_singlescale
+  echo "Ibias_uA   freq_MHz"
+  foreach ib 2u 4u 8u 16u 31u
+    alter Iref dc=$ib
+    tran 0.05n 1.5u 0 0.05n uic
+    * 20 periods in steady state (well past the 0.2us start-up ramp -> full VDD)
+    meas tran t20 TRIG v(clk) VAL=0.75 RISE=20 TARG v(clk) VAL=0.75 RISE=40
+    let freq_mhz = 20.0/t20/1e6
+    echo "  $ib  ->  $&freq_mhz MHz"
+  end
+.endc
+
+.end

@@ -1,0 +1,50 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** 4-bit current-steering DAC characterization: sweep code 0..15, measure output
+** current into a representative load (an NMOS diode, like the RO bias input).
+** DC operating point per code -> code->current transfer, monotonicity, INL.
+** ihp-sg13g2, schematic-level, SPICE-only.
+
+.lib cornerMOSlv.lib mos_tt
+
+.include ../../spice/dac4.spice
+
+.param VDDV=1.5
+
+VDD VDD 0 DC {VDDV}
+VSS VSS 0 0
+
+* Digital code bits (driven by the controller in the real chip); set per-code below.
+Vb0 b0 0 DC 0
+Vb1 b1 0 DC 0
+Vb2 b2 0 DC 0
+Vb3 b3 0 DC 0
+
+* DAC under test; output current sunk by a representative NMOS-diode load via an ammeter.
+Xdac VDD VSS b0 b1 b2 b3 iout dac4
+Vmon iout nload DC 0
+XMload nload nload VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+
+.control
+  echo "code   Iout_uA"
+  foreach code 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+    let cv = $code
+    let c1 = floor(cv/2)
+    let c2 = floor(cv/4)
+    let c3 = floor(cv/8)
+    let v0 = (cv - 2*c1) * 1.5
+    let v1 = (c1 - 2*c2) * 1.5
+    let v2 = (c2 - 2*c3) * 1.5
+    let v3 = (c3 - 2*floor(cv/16)) * 1.5
+    alter Vb0 = $&v0
+    alter Vb1 = $&v1
+    alter Vb2 = $&v2
+    alter Vb3 = $&v3
+    op
+    let iout_ua = i(Vmon)*1e6
+    echo "  $code   ->  $&iout_ua"
+  end
+.endc
+
+.end

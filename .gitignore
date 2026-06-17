@@ -28,3 +28,6 @@ obj_dir/
 /macros/counter/schematic/xschem/simulations
 /macros/counter/testbenches/xschem/simulations
 /macros/counter/flow/final
+/macros/ring_oscillator/schematic/xschem/simulations
+/macros/dac/schematic/xschem/simulations
+_nl/

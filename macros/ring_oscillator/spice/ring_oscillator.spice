@@ -1,0 +1,46 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Current-starved ring oscillator (5 stages) — ihp-sg13g2, schematic-level (pre-layout).
+** Frequency is set by a bias current injected at node 'ibias'. Higher current =>
+** higher frequency (monotonic). 'ibias' is the NMOS-diode node (Vbn); a PMOS mirror
+** derives Vbp so each stage is starved symmetrically on both rails.
+**
+** Ports:  VDD VSS ibias clk
+**   ibias : current input (sink to VSS through the internal NMOS diode); = Vbn gate
+**   clk   : buffered, full-swing oscillator output
+
+*------------------------------------------------------------------------------
+* One current-starved inverter stage.
+*   VDD -[Mcp:gate=vbp]- pp -[Mp:gate=in]- out -[Mn:gate=in]- nn -[Mcn:gate=vbn]- VSS
+.subckt cs_stage VDD VSS vbp vbn in out
+XMcp pp  vbp VDD VDD sg13_lv_pmos w=2u   l=0.5u  ng=1
+XMp  out in  pp  VDD sg13_lv_pmos w=1u   l=0.13u ng=1
+XMn  out in  nn  VSS sg13_lv_nmos w=0.5u l=0.13u ng=1
+XMcn nn  vbn VSS VSS sg13_lv_nmos w=1u   l=0.5u  ng=1
+.ends cs_stage
+
+*------------------------------------------------------------------------------
+.subckt ring_oscillator VDD VSS ibias clk
+
+* --- Bias generation ---
+* NMOS diode: the injected ibias flows from node 'ibias' to VSS, setting Vbn(=ibias).
+XMbn  ibias ibias VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+* NMOS mirror copies ibias and pulls it through a PMOS diode to set Vbp.
+XMmir vbp   ibias VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+XMbp  vbp   vbp   VDD VDD sg13_lv_pmos w=2u l=0.5u ng=1
+
+* --- 5 current-starved inverter stages (odd count => oscillates) ---
+Xstg1 VDD VSS vbp ibias n5 n1 cs_stage
+Xstg2 VDD VSS vbp ibias n1 n2 cs_stage
+Xstg3 VDD VSS vbp ibias n2 n3 cs_stage
+Xstg4 VDD VSS vbp ibias n3 n4 cs_stage
+Xstg5 VDD VSS vbp ibias n4 n5 cs_stage
+
+* --- Output buffer (full strength, not starved) to square up the clock ---
+XMb1p b1  n5 VDD VDD sg13_lv_pmos w=1u   l=0.13u ng=1
+XMb1n b1  n5 VSS VSS sg13_lv_nmos w=0.5u l=0.13u ng=1
+XMb2p clk b1 VDD VDD sg13_lv_pmos w=2u   l=0.13u ng=1
+XMb2n clk b1 VSS VSS sg13_lv_nmos w=1u   l=0.13u ng=1
+
+.ends ring_oscillator

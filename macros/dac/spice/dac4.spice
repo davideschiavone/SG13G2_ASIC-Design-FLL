@@ -1,0 +1,57 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** 4-bit binary-weighted current-steering DAC — ihp-sg13g2, schematic-level (pre-layout).
+** Output current I(iout) = code * IREF, where code = b0 + 2*b1 + 4*b2 + 8*b3 and the
+** bit inputs b0..b3 are digital (0 / VDD), driven by the digital controller (fll_digital).
+**
+** Each binary-weighted PMOS source ALWAYS conducts; a switch pair steers its current to
+** 'iout' (bit = 1) or to an internal dump node (bit = 0) — true current steering, so the
+** reference current is constant and the sources stay in saturation regardless of code.
+**
+** Reference: an IDEAL current source sets the master mirror bias (idealised for now;
+** a real on-chip reference — resistor/bandgap — comes later).
+**
+** Ports:  VDD VSS b0 b1 b2 b3 iout
+
+*------------------------------------------------------------------------------
+* Complement inverter (digital bit -> its complement).
+.subckt dac_inv VDD VSS a y wp=1u wn=0.5u lc=0.13u
+XMp y a VDD VDD sg13_lv_pmos w={wp} l={lc} ng=1
+XMn y a VSS VSS sg13_lv_nmos w={wn} l={lc} ng=1
+.ends dac_inv
+
+*------------------------------------------------------------------------------
+* One binary-weighted steering cell: a PMOS current source (mw units) whose current
+* is steered to 'iout' (b=1) or 'ndump' (b=0). Always conducts (true steering).
+.subckt dac_steer VDD VSS vpcs b bb iout ndump mw=1 wps=2u lps=1u wsw=1u lsw=0.13u
+XMsrc cs    vpcs VDD VDD sg13_lv_pmos w={wps} l={lps} ng=1 m={mw}
+XMto  iout  b    cs  VSS sg13_lv_nmos w={wsw} l={lsw} ng=1 m={mw}
+XMdo  ndump bb   cs  VSS sg13_lv_nmos w={wsw} l={lsw} ng=1 m={mw}
+.ends dac_steer
+
+*------------------------------------------------------------------------------
+.subckt dac4 VDD VSS b0 b1 b2 b3 iout
+
+.param IREF=2u           ; unit (LSB) current — ~2uA/step spans the RO's ~80-540 MHz range
+
+* --- reference current mirror (PMOS): ideal IREF sets gate bias vpcs ---
+Iref   vpcs VSS DC {IREF}
+XMpref vpcs vpcs VDD VDD sg13_lv_pmos w=2u l=1u ng=1
+
+* --- bit complements ---
+Xinv0 VDD VSS b0 b0b dac_inv
+Xinv1 VDD VSS b1 b1b dac_inv
+Xinv2 VDD VSS b2 b2b dac_inv
+Xinv3 VDD VSS b3 b3b dac_inv
+
+* --- shared dump node: diode NMOS holds it near the iout potential for steering symmetry ---
+XMdump ndump ndump VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+
+* --- binary-weighted steering cells (1x, 2x, 4x, 8x) ---
+Xb0 VDD VSS vpcs b0 b0b iout ndump dac_steer mw=1
+Xb1 VDD VSS vpcs b1 b1b iout ndump dac_steer mw=2
+Xb2 VDD VSS vpcs b2 b2b iout ndump dac_steer mw=4
+Xb3 VDD VSS vpcs b3 b3b iout ndump dac_steer mw=8
+
+.ends dac4

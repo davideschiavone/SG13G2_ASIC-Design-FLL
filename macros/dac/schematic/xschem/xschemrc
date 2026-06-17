@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Davide Schiavone
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+# Minimal Xschem rc: load the ihp-sg13g2 PDK symbols + this project directory.
+
+if { ![info exists env(PDK_ROOT)] } { set ::env(PDK_ROOT) /foss/pdks }
+if { ![info exists env(PDK)] }      { set ::env(PDK) ihp-sg13g2 }
+
+# Source the PDK xschemrc (defines device symbol library paths, models, etc.)
+source $env(PDK_ROOT)/$env(PDK)/libs.tech/xschem/xschemrc
+
+# Make this schematic directory available as a library too.
+if {![info exists ::XSCHEM_LIBRARY_PATH]} {
+  set ::XSCHEM_LIBRARY_PATH [file dirname [info script]]
+} else {
+  append ::XSCHEM_LIBRARY_PATH :[file dirname [info script]]
+}
