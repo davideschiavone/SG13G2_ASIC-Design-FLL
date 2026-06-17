@@ -1,12 +1,23 @@
 cff-version: 1.2.0
-message: "If you use this template or base your work on it, please cite it as below."
+message: "If you use this work, please cite it as below."
 authors:
-- family-names: Dorrer
-  given-names: Simon
-  orcid: https://orcid.org/0009-0001-5994-5477
-title: "GitHub Repository for an Open-Source ASIC Design Template for the SG13G2 IHP Open-PDK"
-date-released: 2026-01-26
-url: https://github.com/simi1505/SG13G2_ASIC-Design-Template/tree/2025.12
-identifiers:
-  - type: doi
-    value: 10.5281/zenodo.18378633
+- family-names: Schiavone
+  given-names: Davide
+title: "SG13G2 ASIC Design — a mixed-signal Frequency-Locked Loop (FLL) for the ihp-sg13g2 Open-PDK"
+date-released: 2026
+url: https://github.com/davideschiavone/SG13G2_ASIC-Design-FLL
+references:
+  - type: software
+    title: "GitHub Repository for an Open-Source Analog-Mixed Signal Chip Design Template for the ihp-sg13g2 Open-PDK."
+    authors:
+      - family-names: Dorrer
+        given-names: Simon
+        orcid: https://orcid.org/0009-0001-5994-5477
+      - family-names: Pretl
+        given-names: Harald
+        orcid: https://orcid.org/0000-0003-1519-076X
+    url: https://github.com/iic-jku/ihp-sg13g2-ams-chip-template
+    date-released: 2026
+    identifiers:
+      - type: doi
+        value: 10.5281/zenodo.20129233
