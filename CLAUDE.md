@@ -1,19 +1,60 @@
 ## What this is
-A minimal mixed-signal test chip — a Frequency-Locked Loop (FLL) — for **TinyTapeout**
-on the IHP SG13G2 130nm open PDK. Digital-on-top mixed signal:
-- **Digital (SystemVerilog):** frequency counter + integrator FSM. Counts a ring-VCO
-  over a window of reference-clock cycles, compares against a target, drives an
-  8-bit DAC control word to lock the VCO to ~2x the reference frequency. Hardened
-  to a macro via LibreLane.
-- **Analog (Xschem schematic + layout):** 5-stage ring-oscillator VCO with varactor
-  (load-cap) frequency control; 8-bit current-steering DAC converting the control
-  word to the VCO control voltage.
-- **Integration:** hardened digital macro placed beside the analog macros, routed
-  together, dropped into the **TinyTapeout analog tile**. Digital pins for
-  clk/reset/dac bus; analog pins (ua[0..]) for control voltage and VCO feedback.
+A minimal mixed-signal test chip for **TinyTapeout** on the IHP SG13G2 130nm open PDK.
+The project name is **FLL** (Frequency-Locked Loop), but **v1 is intentionally
+open-loop** — it is a digitally-controlled ring oscillator (DCO) with a frequency
+monitor output, NOT a closed-loop frequency *lock*. The goal of v1 is to learn and
+exercise the full open-source mixed-signal flow end-to-end, not to build a
+high-quality FLL. (Closed-loop locking — frequency counter + servo — is a documented
+future extension; see "Future work".)
+
+Digital-on-top mixed signal, v1 (open-loop DCO):
+- **Digital (SystemVerilog, macro `fll_digital`):** registers a 4-bit user code to a
+  DAC control word, and divides the ring-oscillator output by 1024 to a monitor pin
+  (for an LED / oscilloscope). No frequency counter, no servo. Hardened to a macro via
+  LibreLane.
+- **Analog (Xschem schematic + layout):** 5-stage **current-starved ring oscillator**
+  whose frequency is set by a bias current; **4-bit current-steering DAC** that turns
+  the digital code into that bias current.
+- **Integration:** hardened `fll_digital` macro placed beside the analog macros, routed
+  together, dropped into the **TinyTapeout analog tile**. Digital pins for clk/reset/
+  4-bit code/monitor-out; analog pins (ua[0..]) for bias/observation.
 
 Owner: Davide Schiavone (GitHub: davideschiavone).
 Remote: github.com/davideschiavone/SG13G2_ASIC-Design-FLL
+
+## FLL v1 design spec (open-loop DCO) — the build target
+Signal flow (fully on-chip except observation pins):
+`ui_in[3:0] → (clk reg) → dac_code[3:0] → 4b current-steering DAC → bias current →
+current-starved ring oscillator → ro_clk → ÷1024 → uo_out[0] (monitor)`
+
+**Digital macro `fll_digital` — behavior**
+- `dac_code[3:0] <= ui_in[3:0]` registered on `clk` (open-loop control word to the DAC).
+- ÷1024 divider: 10-bit counter clocked by `ro_clk`; `fout = cnt[9]` (= f_RO / 1024).
+- Two independent clock domains that exchange NO data (`clk`→DAC code; `ro_clk`→divider)
+  — so there is no metastable CDC. `fout` is a free-running divided clock driven to a pad.
+
+**Pin map (TinyTapeout digital interface; all projects get it)**
+| Pin | Dir | Use |
+| --- | --- | --- |
+| `clk` | in | system clock (registers `dac_code`) |
+| `rst_n` | in | async reset (`dac_code`→`DAC_RST`, divider→0) |
+| `ena` | in | tile enable (TT-managed) |
+| `ui_in[3:0]` | in | **4-bit frequency control code** |
+| `ui_in[7:4]` | in | unused |
+| `uo_out[0]` | out | **`fout` = RO ÷ 1024** → GPIO → LED / scope |
+| `uo_out[7:4]` | out | `dac_code` echo (observability) |
+| `uo_out[3:1]` | out | 0 |
+| `uio_*` | — | unused (`uio_oe = 8'h00`) |
+
+**Internal macro ports:** `dac_code[3:0]` (out → DAC macro), `ro_clk` (in ← RO macro).
+
+**Analog pins (`ua`, used in order — finalize when the analog macros are designed):**
+`ua[0]` = DAC bias / RO control node (observe or force); `ua[1]` = external reference
+current/voltage in; `ua[2]` = optional raw RO tap for scope (the digital `fout` is the
+primary measurement path).
+
+**Parameters (SV localparams):** `DAC_W=4`, divider `DIV=1024` (`DIV_W=10`, `fout=cnt[9]`),
+`DAC_RST=8` (mid-code, RO mid-range). No counter/target/window/step/tol in v1.
 
 ## Repository scaffold & provenance (READ THIS — it changed)
 This repo is built on JKU's LibreLane-based **ihp-sg13g2-ams-chip-template** (Simon
@@ -39,10 +80,9 @@ Makefile-driven; `make help` lists every target.
 ### How the template maps onto the FLL
 The template ships two example macros under `macros/`; each is the pattern for our blocks:
 - `macros/counter/` — **digital** macro: SV RTL → cocotb → LibreLane harden
-  (`flow/librelane/config.yaml`, `pin_order.cfg`, SDCs). → pattern for the **FLL
-  controller** (frequency counter + integrator FSM).
+  (`flow/librelane/config.yaml`, `pin_order.cfg`, SDCs). → pattern for `fll_digital`.
 - `macros/inverter/` — **analog** macro: Xschem schematic → hand layout GDS →
-  DRC/LVS/PEX. → pattern for the **ring-VCO** and **8-bit DAC**.
+  DRC/LVS/PEX. → pattern for the **ring oscillator** and the **4-bit DAC**.
 - `rtl/chip_top.sv` + `rtl/chip_core.sv` + `flow/librelane/` — the template's padframe
   top level (scaffold only; see divergence above).
 
@@ -92,22 +132,23 @@ the human opens Xschem/KLayout in the browser to view or tweak. GUI Make targets
 
 Everything tool-related must target the **ihp-sg13g2** PDK, never sky130.
 
-## Methodology (work in this order)
-1. RTL first: write + lint + cocotb-sim the digital controller standalone as a macro
-   under `macros/` (pattern: `macros/counter/`). Headless.
-2. Analog blocks: VCO and DAC as Xschem schematics under their own `macros/` dirs
-   (pattern: `macros/inverter/`); characterize each headless in ngspice (VCO freq vs
-   Vctrl DC sweep; DAC monotonicity/INL).
-3. Mixed-signal co-sim: closed-loop testbench with a BEHAVIORAL Verilog-A model of
-   the controller + transistor-level analog; verify it actually locks (transient).
-4. Harden digital with LibreLane -> macro (gds/lef/lib) via `make build-<controller>`.
-5. Gate-level mixed-signal re-verify: swap the behavioral model for the hardened
-   netlist (XSPICE event-driven model — see `reference/orfs-xspice/` for the qflow
-   `.xspice` approach, or the template's `sim-gl-xschem`); confirm lock survives gate
-   delays.
-6. Analog layout in KLayout/Magic (human does GUI work; you prep what you can);
+## Methodology (work in this order) — v1 open-loop
+1. **RTL (M0):** write + lint + cocotb-sim `fll_digital` standalone as a macro under
+   `macros/fll_digital/` (pattern: `macros/counter/`). Check: code→`dac_code`, ÷1024
+   divider, reset, pin map. Headless.
+2. **Analog blocks:** 4-bit current-steering DAC and current-starved ring oscillator as
+   Xschem schematics under their own `macros/` dirs (pattern: `macros/inverter/`);
+   characterize each headless in ngspice — DAC: code→bias current (monotonicity);
+   RO: bias current→frequency (monotonic, usable range).
+3. **Mixed-signal co-sim:** OPEN-loop testbench — drive `ui_in[3:0]`, watch `fout`
+   track frequency. Behavioral analog model first, then transistor-level.
+4. **Harden digital** with LibreLane -> macro (gds/lef/lib) via `make build-fll_digital`.
+5. **Gate-level mixed-signal re-verify:** swap behavioral digital for the hardened
+   netlist (template `sim-gl-xschem`, or the qflow `.xspice` approach in
+   `reference/orfs-xspice/`); confirm `fout` still tracks code with real gate delays.
+6. **Analog layout** in KLayout/Magic (human does GUI work; you prep what you can);
    DRC/LVS/PEX clean each macro (`make klayout-lvs` / `make magic-lvs`).
-7. Top-level: adapt the hardened FLL macros into the **TinyTapeout analog harness**
+7. **Top-level:** adapt the hardened macros into the **TinyTapeout analog harness**
    (NOT the template padframe); floorplan + route + DRC/LVS; export final GDS.
 8. Fill TinyTapeout `info.yaml`, run precheck.
 
@@ -118,6 +159,13 @@ Everything tool-related must target the **ihp-sg13g2** PDK, never sky130.
   the tapeout vehicle.
 - Target node: ihp-sg13g2.
 
+## Future work (out of scope for v1)
+- Close the loop: add a gated frequency counter (RO edges over N `clk` cycles, with a
+  proper async CDC), a target multiplier `M` (lock `f_RO = M × f_ref`), a bang-bang/PI
+  servo on `dac_code`, and a `locked` flag — turning the open-loop DCO into a real FLL.
+- Wider DAC (e.g. 8-bit) for finer frequency resolution.
+- A register-file control interface if more configurability is needed.
+
 ## Working style
 - The owner is an RTL/architecture person, NOT an analog-layout expert. Explain
   analog steps a bit more; move fast on RTL/flow.
@@ -126,4 +174,7 @@ Everything tool-related must target the **ihp-sg13g2** PDK, never sky130.
   Bottom-up arithmetic over hand-waving.
 - Push back on anything that won't DRC/LVS or won't fit the tile.
 - Small, reviewable steps. Show what you're about to run before big operations
-  (layout edits, LibreLane runs). git commit per milestone.
+  (layout edits, LibreLane runs).
+- **Commit milestones automatically — do NOT ask for permission to commit each time.**
+  Use clear messages, commit per logical milestone, and just report what was committed.
+  (Still surface big/destructive operations before running them.)

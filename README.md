@@ -1,8 +1,24 @@
 ﻿# SG13G2 ASIC Design — Frequency-Locked Loop (FLL)
 
-A mixed-signal Frequency-Locked Loop test chip on the IHP **SG13G2** 130 nm open PDK,
-targeting a **TinyTapeout analog tile**. Owner: Davide Schiavone
+A minimal mixed-signal test chip on the IHP **SG13G2** 130 nm open PDK, targeting a
+**TinyTapeout analog tile**. Owner: Davide Schiavone
 ([@davideschiavone](https://github.com/davideschiavone)).
+
+**What v1 actually is (be precise):** an **open-loop digitally-controlled ring
+oscillator (DCO)** with a frequency-monitor output — *not* a closed-loop frequency
+*lock*. A 4-bit user code drives a 4-bit current-steering DAC, which sets the bias
+current of a current-starved ring oscillator; the oscillator output is divided by 1024
+and brought out to a GPIO for an LED / oscilloscope. The point of v1 is to learn the
+full open-source mixed-signal flow (RTL → LibreLane macro → analog macros → DRC/LVS/PEX
+→ TinyTapeout integration), not to build a high-quality FLL. Closing the loop (frequency
+counter + servo + lock detect) is a documented future extension.
+
+- **Digital macro `fll_digital`** (SystemVerilog → LibreLane): registers `ui_in[3:0]`
+  to `dac_code[3:0]`; divides the ring-oscillator clock by 1024 onto `uo_out[0]`.
+- **Analog macros** (Xschem → layout): 4-bit current-steering DAC + 5-stage
+  current-starved ring oscillator.
+
+See [`CLAUDE.md`](CLAUDE.md) for the full v1 spec (pin map, parameters, methodology).
 
 > **Provenance & attribution.** This repository is built on JKU's open-source
 > **[ihp-sg13g2-ams-chip-template](https://github.com/iic-jku/ihp-sg13g2-ams-chip-template)**
