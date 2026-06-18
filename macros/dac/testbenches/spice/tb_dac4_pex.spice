@@ -1,0 +1,51 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Post-layout (PEX) DAC characterization: same stimulus/load as tb_dac4.spice, but the
+** DUT is the full-RC extracted layout (dac4_pex.spice, vpcs driven externally by the ideal
+** 2 uA reference since the ideal source is off-chip). Sweep code 0..15, measure I_out.
+** Compare I_out/code against the schematic golden (make sim) to within +/-1%.
+
+.lib cornerMOSlv.lib mos_tt
+.include dac4_pex.spice
+
+.param VDDV=1.5
+
+VDD VDD 0 DC {VDDV}
+VSS VSS 0 0
+
+Vb0 b0 0 DC 0
+Vb1 b1 0 DC 0
+Vb2 b2 0 DC 0
+Vb3 b3 0 DC 0
+
+* ideal reference current into the mirror node vpcs (off-chip in v1)
+Iref vpcs VSS DC 2u
+
+* PEX DUT — port order matches the extracted subckt: VDD VSS vpcs iout b0 b1 b2 b3
+Xdac VDD VSS vpcs iout b0 b1 b2 b3 dac4
+Vmon iout nload DC 0
+XMload nload nload VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+
+.control
+  echo "code   Iout_uA"
+  foreach code 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+    let cv = $code
+    let c1 = floor(cv/2)
+    let c2 = floor(cv/4)
+    let c3 = floor(cv/8)
+    let v0 = (cv - 2*c1) * 1.5
+    let v1 = (c1 - 2*c2) * 1.5
+    let v2 = (c2 - 2*c3) * 1.5
+    let v3 = (c3 - 2*floor(cv/16)) * 1.5
+    alter Vb0 = $&v0
+    alter Vb1 = $&v1
+    alter Vb2 = $&v2
+    alter Vb3 = $&v3
+    op
+    let iout_ua = i(Vmon)*1e6
+    echo "  $code   ->  $&iout_ua"
+  end
+.endc
+
+.end

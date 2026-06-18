@@ -73,9 +73,32 @@ compact**; if PEX fails ±1% the fix is a compact common-centroid current-source
 (b) Real DAC matching (gradients, common-centroid, dummies) is a v2 concern — nominal PEX
 (§5) has no device mismatch, so it tests parasitics, not matching.
 
-## 5. PEX results vs schematic (±1% check on I_out/LSB)
-_(to be filled — `make magic-pex CELL=dac4`, drive `vpcs` with the ideal 2 µA, sweep code
-0→15, compare I_out/code to the pre-layout reference: ~2.05 µA/LSB, code 15 → 30.8 µA)_
+## 5. PEX results vs schematic — PASS (≪ ±1%)
+
+Full-RC extraction from the `.mag` ([scripts/mag_extract_pex.tcl](../../scripts/mag_extract_pex.tcl),
+417 R + 350 C) → [testbenches/spice/tb_dac4_pex.spice](testbenches/spice/tb_dac4_pex.spice)
+drives `vpcs` with the ideal 2 µA and sweeps code 0→15. Compared to the schematic golden
+(`make sim`):
+
+| code | golden I_out (µA) | PEX I_out (µA) | Δ |
+| ---: | ---: | ---: | ---: |
+| 1  | 2.0743  | 2.0742  | <0.01% |
+| 3  | 6.2055  | 6.1997  | 0.094% (worst) |
+| 7  | 14.4321 | 14.4321 | <0.01% |
+| 8  | 16.4830 | 16.4829 | <0.01% |
+| 15 | 30.7852 | 30.7851 | <0.01% |
+
+All codes agree to **well within ±1%** (worst case 0.094%). The current-steering DAC is
+robust to layout parasitics at DC — the parasitic R on `iout`/`vpcs`/rails barely
+perturbs the steered currents — so **no compensation elements were needed** and the wide
+flat floorplan is acceptable for this macro.
+
+Reproduce: `make magic-pex CELL=dac4` (GDS, sak-pex) or the `.mag` flow above, then
+`ngspice -b tb_dac4_pex.spice`.
+
+## 6. Compensation elements added (with schematic update)
+
+None required — PEX already meets ±1% (§5). No schematic change.
 
 ## 6. Compensation elements added (with schematic update)
 _(to be filled)_
