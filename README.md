@@ -18,7 +18,8 @@ counter + servo + lock detect) is a documented future extension.
 - **Analog macros** (Xschem → layout): 4-bit current-steering DAC + 5-stage
   current-starved ring oscillator.
 
-See [`CLAUDE.md`](CLAUDE.md) for the full v1 spec (pin map, parameters, methodology).
+See [`CLAUDE.md`](CLAUDE.md) for the full v1 spec (pin map, parameters, methodology),
+and [`COMMANDS.md`](COMMANDS.md) for a command cheat-sheet (sim/wave/xschem for every block).
 
 > **Provenance & attribution.** This repository is built on JKU's open-source
 > **[ihp-sg13g2-ams-chip-template](https://github.com/iic-jku/ihp-sg13g2-ams-chip-template)**
