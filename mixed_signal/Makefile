@@ -37,6 +37,10 @@ wave: ## Convert + open the mixed-signal waveforms in GTKWave (GUI on $(DISPLAY)
 	DISPLAY=$(DISPLAY) gtkwave $(VCD)
 .PHONY: wave
 
+plot: ## Open the last raw in ngspice's NATIVE plotter, no VCD (GUI on $(DISPLAY)); 'quit' to exit
+	DISPLAY=$(DISPLAY) ngspice plot_raw.spice
+.PHONY: plot
+
 all: ## build + sim + open waveforms in GTKWave
 	$(MAKE) build
 	$(MAKE) sim

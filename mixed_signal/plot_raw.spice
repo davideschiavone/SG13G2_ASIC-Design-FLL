@@ -1,0 +1,15 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Open the last mixed-signal rawfile in ngspice's NATIVE plotter (no re-simulation,
+** no VCD/GTKWave). Run interactively with a display: ngspice stays at its prompt with
+** the plot windows open; type 'quit' to exit.
+**   ../run.sh "cd mixed_signal && DISPLAY=:1 ngspice plot_raw.spice"
+**   (or: make plot)
+
+.control
+load tb_mixed_dac_ro.raw
+plot v(ro_clk) v(nbias)
+plot v(d3) v(d2) v(d1) v(d0) v(fout)
+.endc
+.end
