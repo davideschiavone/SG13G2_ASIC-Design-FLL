@@ -30,6 +30,10 @@ sim-wave: ## Plot the RO transient v(clk), v(nbias) in ngspice (GUI on $(DISPLAY
 	cd $(TB_DIR) && DISPLAY=$(DISPLAY) ngspice tb_ring_oscillator_wave.spice
 .PHONY: sim-wave
 
+sim-wave-dacro: ## Plot the combined DAC+RO transient (code=8) v(clk) in ngspice (GUI on $(DISPLAY))
+	cd $(TB_DIR) && DISPLAY=$(DISPLAY) ngspice tb_dac_ro_wave.spice
+.PHONY: sim-wave-dacro
+
 xschem: ## Open the ring_oscillator schematic in Xschem (GUI on $(DISPLAY))
 	cd $(SCH_DIR) && DISPLAY=$(DISPLAY) xschem --rcfile xschemrc ring_oscillator.sch
 .PHONY: xschem

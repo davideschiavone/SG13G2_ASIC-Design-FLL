@@ -1,0 +1,30 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Combined DAC + ring-oscillator transient for WAVEFORM viewing at a fixed code.
+** The Vb0..Vb3 sources pretend to be fll_digital; here code = 8 (b3=1). Plot v(clk).
+** Run interactively with a display (make sim-wave-dacro) to see the ngspice plot.
+
+.lib cornerMOSlv.lib mos_tt
+.include ../../spice/ring_oscillator.spice
+.include ../../../dac/spice/dac4.spice
+
+.param VDDV=1.5
+VDD VDD 0 PWL(0 0 0.2u {VDDV})
+VSS VSS 0 0
+
+* code = 8  (b3 b2 b1 b0 = 1 0 0 0)
+Vb0 b0 0 DC 0
+Vb1 b1 0 DC 0
+Vb2 b2 0 DC 0
+Vb3 b3 0 DC {VDDV}
+
+Xdac VDD VSS b0 b1 b2 b3 nbias dac4
+Xro  VDD VSS nbias clk ring_oscillator
+
+.control
+tran 0.02n 0.5u 0 0.02n uic
+write tb_dac_ro_wave.raw v(clk) v(nbias)
+plot v(clk) v(nbias)
+.endc
+.end
