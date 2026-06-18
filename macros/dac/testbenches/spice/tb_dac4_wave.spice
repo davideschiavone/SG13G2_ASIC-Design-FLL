@@ -1,0 +1,45 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** DAC transfer curve for WAVEFORM viewing: sweep code 0..15, plot output current.
+** Run interactively with a display (make sim-wave) to see the ngspice plot.
+
+.lib cornerMOSlv.lib mos_tt
+.include ../../spice/dac4.spice
+
+.param VDDV=1.5
+VDD VDD 0 DC {VDDV}
+VSS VSS 0 0
+Vb0 b0 0 DC 0
+Vb1 b1 0 DC 0
+Vb2 b2 0 DC 0
+Vb3 b3 0 DC 0
+Xdac VDD VSS b0 b1 b2 b3 iout dac4
+Vmon iout nload DC 0
+XMload nload nload VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+
+.control
+let codev  = vector(16)
+let ioutv  = vector(16)
+let k = 0
+dowhile k < 16
+  let cv = k
+  let c1 = floor(cv/2)
+  let c2 = floor(cv/4)
+  let c3 = floor(cv/8)
+  let v0 = (cv - 2*c1) * 1.5
+  let v1 = (c1 - 2*c2) * 1.5
+  let v2 = (c2 - 2*c3) * 1.5
+  let v3 = (c3 - 2*floor(cv/16)) * 1.5
+  alter Vb0 = $&v0
+  alter Vb1 = $&v1
+  alter Vb2 = $&v2
+  alter Vb3 = $&v3
+  op
+  let ioutv[k] = i(Vmon)*1e6
+  let k = k + 1
+end
+print ioutv
+plot ioutv vs codev
+.endc
+.end

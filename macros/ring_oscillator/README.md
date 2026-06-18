@@ -43,5 +43,8 @@ Monotonic; the RO-only and DAC+RO curves agree. (NB: measure in steady state —
 edges during the 0.2 µs VDD ramp read low and can look non-monotonic.) After the
 ÷1024 in `fll_digital` these give ~70 kHz … ~760 kHz at the monitor pin.
 
-Run: `ngspice -b testbenches/spice/tb_ring_oscillator.spice` (or `tb_dac_ro.spice`).
-Visualize: `xschem schematic/xschem/ring_oscillator.sch`.
+## Make targets (run via `../../run.sh "make -C macros/ring_oscillator <target>"`)
+- `make sim`       — RO frequency-vs-bias sweep (ngspice batch → table)
+- `make sim-dacro` — combined DAC+RO code→frequency sweep
+- `make sim-wave`  — plot the RO transient `v(clk)`/`v(nbias)` in ngspice (GUI on noVNC `:1`)
+- `make xschem`    — open the schematic in Xschem (GUI on noVNC `:1`)

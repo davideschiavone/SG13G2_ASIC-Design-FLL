@@ -25,8 +25,7 @@ Schematic-level (pre-layout), ihp-sg13g2. No layout yet.
 Monotonic, LSB ≈ 2.05 µA. Note: code 0 ⇒ ~0 current ⇒ the ring oscillator stops; use
 codes 1..15 (adding a small always-on floor current is an easy future enhancement).
 
-## Run (inside the container, via `../../run.sh`)
-```
-ngspice -b testbenches/spice/tb_dac4.spice          # code -> current
-```
-Visualize: `xschem schematic/xschem/dac4.sch` (host display or noVNC :1).
+## Make targets (run via `../../run.sh "make -C macros/dac <target>"`)
+- `make sim`      — DAC code→output-current DC characterization (ngspice batch → table)
+- `make sim-wave` — plot the transfer (I_out vs code) in ngspice (GUI on noVNC `:1`)
+- `make xschem`   — open the dac4 schematic in Xschem (GUI on noVNC `:1`)

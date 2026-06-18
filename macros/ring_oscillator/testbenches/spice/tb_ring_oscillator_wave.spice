@@ -1,0 +1,21 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Ring-oscillator transient for WAVEFORM viewing: fixed bias current, plot v(clk).
+** Run interactively with a display (make sim-wave) to see the ngspice plot.
+
+.lib cornerMOSlv.lib mos_tt
+.include ../../spice/ring_oscillator.spice
+
+.param VDDV=1.5
+VDD VDD 0 PWL(0 0 0.2u {VDDV})
+VSS VSS 0 0
+Iref VDD nbias DC 8u
+Xro VDD VSS nbias clk ring_oscillator
+
+.control
+tran 0.02n 0.5u 0 0.02n uic
+write tb_ring_oscillator_wave.raw v(clk) v(nbias)
+plot v(clk) v(nbias)
+.endc
+.end
