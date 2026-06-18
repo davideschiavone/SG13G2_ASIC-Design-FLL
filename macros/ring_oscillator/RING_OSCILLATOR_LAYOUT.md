@@ -136,9 +136,40 @@ tall routing channel). It's the right thing to get DRC/LVS-clean first; if PEX (
 the long M3 tracks push key metrics past ±1%, the next step is a more compact floorplan
 (e.g. cs_stage tiled hierarchically with shared abutted rails).
 
-## 6. PEX results vs schematic (±1% check)
-_(to be filled — extract with `make magic-pex CELL=ring_oscillator`, sim freq vs ibias,
-compare to the pre-layout reference: 2 µA→69, 8 µA→278, 16 µA→550, 31 µA→775 MHz)_
+## 6. PEX results vs schematic — FAILS ±1% on the flat floorplan → needs compaction
+
+Full-RC PEX from the `.mag` (`make pex CELL=ring_oscillator`, 214 R + 272 C) →
+[testbenches/spice/tb_ring_oscillator_pex.spice](testbenches/spice/tb_ring_oscillator_pex.spice),
+same ideal-bias frequency sweep as the golden:
+
+| I_bias | golden freq | PEX freq | result |
+| ---: | ---: | ---: | --- |
+| 2 µA  | 69.3 MHz  | (too slow to measure¹) | ✗ |
+| 8 µA  | 277.7 MHz | (too slow to measure¹) | ✗ |
+| 31 µA | 774.5 MHz | **37.6 MHz** | ✗ (~20× low) |
+
+¹ at the PEX-loaded speed the sweep can't capture 40 edges in the 1.5 µs window.
+
+**This FAILS ±1% by ~20×, and it's expected.** Root cause: the flat one-row floorplan
+routes every ring node (`n1..n5`) on a long M3 track, and **`n5` — the ring feedback —
+spans the entire ~80 µm width** (stage 5 + buffer back to stage 1's input). The parasitic
+capacitance on these ring nodes dwarfs the intrinsic node cap, so the oscillator runs far
+slower. The DAC was immune (DC, §DAC), but an oscillator's frequency *is* node cap, so the
+RO is the worst case for a sprawling layout.
+
+**Fix (next step): compact the RO floorplan so ring nodes are short.** Plan:
+- Make `cs_stage` tileable: ports `in` on the left edge, `out` on the right edge, with
+  `VDD`/`VSS`/`vbp`/`vbn` as horizontal rails that abut between tiles.
+- Abut the 5 stages so each `n_i` is a short stage-to-stage wire (local M1/M2, not a long
+  M3 track), and fold/place the buffer next to stage 5 so the `n5` feedback is short.
+- Keep only the truly global nets (`vbp`, `ibias`, `VDD`, `VSS`) on rails; route ring
+  nodes locally. Re-run DRC/LVS, then PEX until freq-vs-bias is within ±1%.
+
+The flat layout is retained for now as a correct (DRC/LVS-clean) reference; the compaction
+is a layout change only (no schematic change), so LVS stays valid against the same
+`spice/ring_oscillator.spice`.
+
+Reproduce: `make pex CELL=ring_oscillator && make sim-pex` vs `make sim`.
 
 ## 6. Compensation elements added (with schematic update)
 _(to be filled)_

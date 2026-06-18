@@ -1,0 +1,32 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** Post-layout (PEX) ring-oscillator characterization: same stimulus as
+** tb_ring_oscillator.spice, but the DUT is the full-RC extracted layout. Sweep the ideal
+** bias current and measure oscillation frequency; compare to the schematic golden (+/-1%).
+
+.lib cornerMOSlv.lib mos_tt
+
+.include ring_oscillator_pex.spice
+
+.param VDDV=1.5
+
+VDD VDD 0 PWL(0 0 0.2u {VDDV})
+VSS VSS 0 0
+Iref VDD nbias DC 8u
+
+Xro VDD VSS nbias clk ring_oscillator
+
+.control
+  set wr_singlescale
+  echo "Ibias_uA   freq_MHz"
+  foreach ib 2u 4u 8u 16u 31u
+    alter Iref dc=$ib
+    tran 0.05n 1.5u 0 0.05n uic
+    meas tran t20 TRIG v(clk) VAL=0.75 RISE=20 TARG v(clk) VAL=0.75 RISE=40
+    let freq_mhz = 20.0/t20/1e6
+    echo "  $ib  ->  $&freq_mhz MHz"
+  end
+.endc
+
+.end

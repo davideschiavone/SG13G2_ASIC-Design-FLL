@@ -90,11 +90,22 @@ lvs: ## LVS layout/$(CELL).mag vs spice/$(CELL).spice (Magic extract + netgen)
 .PHONY: lvs
 
 # ----- PEX --------------------------------------------------------------------
-magic-pex: ## Magic parasitic extraction of $(CELL) (EXT_MODE=1|2|3)
+magic-pex: ## Magic parasitic extraction of $(CELL) (EXT_MODE=1|2|3, from GDS)
 	mkdir -p $(PEX_DIR)
 	sak-pex.sh -d -m $(EXT_MODE) -w $(PEX_DIR) $(LAY_DIR)/$(CELL).gds
 	mv $(PEX_DIR)/$(CELL).pex.spice $(PEX_DIR)/$(CELL)_magic_pex_$(EXT_MODE).spice
 .PHONY: magic-pex
+
+pex: ## Full-RC PEX from .mag (ports preserved) -> testbenches/spice/$(CELL)_pex.spice
+	mkdir -p $(PEX_DIR)
+	cp $(LAY_DIR)/*.mag $(PEX_DIR)/
+	cd $(PEX_DIR) && LVS_CELL=$(CELL) magic -dnull -noconsole -rcfile $(MAGICRC) $(REPO_ROOT)/scripts/mag_extract_pex.tcl
+	cp $(PEX_DIR)/$(CELL)_pex.spice $(TB_DIR)/
+.PHONY: pex
+
+sim-pex: ## Run the post-layout (PEX) RO frequency sweep (needs `make pex` first)
+	cd $(TB_DIR) && ngspice -b tb_ring_oscillator_pex.spice
+.PHONY: sim-pex
 
 verify: ## gen + DRC + LVS of $(CELL)
 	$(MAKE) gen-layout CELL=$(CELL)
