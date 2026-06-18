@@ -1,0 +1,7 @@
+# Layout intermediates (regenerable via `make gen-layout`)
+layout/_*
+layout/*.mag
+layout/*.ext
+# Verification / extraction outputs
+verification/
+netlist/

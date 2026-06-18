@@ -66,14 +66,57 @@ came back **DRC-clean** — confirming the approach end-to-end.
 
 ---
 
-## 2. Floorplan
-_(to be filled as the layout is built — leaf `cs_stage`, then the 5-stage chain + bias + buffer)_
+## 2. Generator & flow
 
-## 3. Device placement & matching decisions
-_(to be filled)_
+Layout is produced by [scripts/genlayout.py](../../scripts/genlayout.py) (a small
+Python→Magic-TCL helper: device table, edge-to-edge row placement, M3/M4 over-the-cell
+router, port labelling) driven per-cell by
+[scripts/gen_ro_layout.py](scripts/gen_ro_layout.py). The Makefile wires it up:
 
-## 4. DRC / LVS iterations and fixes
-_(to be filled)_
+```
+make gen-layout CELL=cs_stage     # python generator -> Magic -> layout/cs_stage.{mag,gds}
+make magic-drc  CELL=cs_stage     # sak-drc.sh
+make lvs        CELL=cs_stage     # extract from .mag (ports preserved) + netgen vs spice/
+make verify     CELL=cs_stage     # all three
+```
+
+**Why LVS extracts from `.mag`, not `.gds`:** a GDS round-trip drops Magic's port flags,
+so single-terminal port nets (the `vbp`/`vbn` bias inputs) extract as floating "no
+connects" and netgen can't match them. Extracting straight from the `.mag`
+([scripts/mag_extract_lvs.tcl](../../scripts/mag_extract_lvs.tcl)) keeps the ports. The
+generator runs `writeall force` so the device subcells are on disk for `.mag` extraction.
+
+## 3. `cs_stage` leaf cell — DONE (DRC + LVS clean)
+
+The matched leaf: one current-starved inverter stage, 4 FETs in a row
+(`Mcp` p 2/0.5 · `Mp` p 1/0.13 · `Mn` n 0.5/0.13 · `Mcn` n 1/0.5), each generated with a
+**guard ring** (`guard 1`) so it carries its own nwell/psub tap (`B` port) — robust for
+DRC and LVS at the cost of area. Devices are placed **edge-to-edge with a 0.7 µm gap**
+between full bboxes (the guarded device extent is up to 2.82 µm wide — far larger than the
+diffusion). All signals route up from each terminal through an M1→M2→M3→M4 via stack;
+nets then run on **M3 horizontal tracks** (one per net) with **M4 vertical jogs** above the
+row, and the `VDD`/`VSS` rails run on M3 tracks below the row (the guard `B` ports are at
+the bottom). Every terminal's x is distinct, so jogs never collide. **No metal5.**
+
+Result: `make verify CELL=cs_stage` → Magic DRC clean, KLayout DRC clean (via-stack +
+M3 verified in both), netgen **"Circuits match uniquely"** vs
+[spice/cs_stage.spice](spice/cs_stage.spice).
+
+## 4. DRC / LVS iterations and fixes (what bit us, and the fix)
+
+1. **`getcell` placement units.** `getcell <dev> child 0 0 parent <x> <y>` takes the
+   parent ref-point in **internal units (200/µm)**, while painting uses microns. Passing
+   lambda (100/µm) placed every device at half-position — paint and devices diverged and
+   everything shorted. Fix: `UM_TO_IU = 200`.
+2. **Device overlap.** First pitch (2.6 µm) was smaller than the guarded device extent →
+   nwells/diffusions merged → giant short to substrate. Fix: place by real full-bbox
+   half-widths + gap (`place_row`).
+3. **Cell named after the path.** `save layout/cs_stage` made the *cell* "layout/cs_stage";
+   extraction's `load cs_stage` then failed. Fix: run Magic with cwd=`layout/`, save bare
+   name.
+4. **Ports lost.** `label <net> <layer>` needs a position arg (`label <net> center
+   <layer>`); ports are made with `port make <i>` on the single label under the cursor box.
+   And LVS must extract from `.mag` (see §2), else ports vanish.
 
 ## 5. PEX results vs schematic (±1% check)
 _(to be filled)_

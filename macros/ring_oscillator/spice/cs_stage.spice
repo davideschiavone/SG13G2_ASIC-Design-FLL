@@ -1,0 +1,15 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** One current-starved inverter stage — standalone LVS reference for the layout leaf
+** cell macros/ring_oscillator/layout/cs_stage.gds. Identical to the cs_stage subckt in
+** ring_oscillator.spice; kept here so `sak-lvs.sh -s cs_stage.spice` can verify the leaf.
+**
+** Ports:  VDD VSS vbp vbn in out
+.subckt cs_stage VDD VSS vbp vbn in out
+*.PININFO VDD:B VSS:B vbp:I vbn:I in:I out:O
+XMcp pp  vbp VDD VDD sg13_lv_pmos w=2u   l=0.5u  ng=1
+XMp  out in  pp  VDD sg13_lv_pmos w=1u   l=0.13u ng=1
+XMn  out in  nn  VSS sg13_lv_nmos w=0.5u l=0.13u ng=1
+XMcn nn  vbn VSS VSS sg13_lv_nmos w=1u   l=0.5u  ng=1
+.ends cs_stage
