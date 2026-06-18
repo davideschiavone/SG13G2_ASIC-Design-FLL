@@ -39,6 +39,11 @@ DEVICES = {
                         ports=dict(D=(-0.255, 0.0), S=(0.255, 0.0), G=(0.0, 0.47), B=(0.0, -0.84))),
     "nmos_1_0p5":  dict(kind="nmos", w=1.0,  l=0.5,  fhw=1.41,  fhh=1.55,
                         ports=dict(D=(-0.44, 0.0), S=(0.44, 0.0), G=(0.0, 0.72), B=(0.0, -1.09))),
+    # output-buffer devices
+    "pmos_2_0p13": dict(kind="pmos", w=2.0,  l=0.13, fhw=1.225, fhh=2.05,
+                        ports=dict(D=(-0.255, 0.0), S=(0.255, 0.0), G=(0.0, 1.22), B=(0.0, -1.59))),
+    "nmos_1_0p13": dict(kind="nmos", w=1.0,  l=0.13, fhw=1.225, fhh=1.55,
+                        ports=dict(D=(-0.255, 0.0), S=(0.255, 0.0), G=(0.0, 0.72), B=(0.0, -1.09))),
 }
 
 # routing geometry (um)

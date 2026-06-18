@@ -118,8 +118,27 @@ M3 verified in both), netgen **"Circuits match uniquely"** vs
    <layer>`); ports are made with `port make <i>` on the single label under the cursor box.
    And LVS must extract from `.mag` (see §2), else ports vanish.
 
-## 5. PEX results vs schematic (±1% check)
-_(to be filled)_
+## 5. Full `ring_oscillator` — DONE (DRC + LVS clean)
+
+Composed **flat** (not as cs_stage instances) by the same generator/router:
+27 FETs in one row — bias gen (`Mbn`,`Mmir`,`Mbp`) · 5 current-starved stages (4 FETs
+each) · output buffer (`Mb1p/n`,`Mb2p/n`) — with all nets on M3 tracks (19 signal/bias
+tracks above the row, `VDD`/`VSS` rails below) and M4 jogs. Ring feedback (`n5`→`n1`),
+the shared `vbp`/`ibias` bias rails, and the buffer tap on `n5` are just long M3 tracks.
+`vbn` is `ibias` (the stages' `Mcn` gates tie to the bias node directly, matching the
+schematic). Ports: `VDD VSS ibias clk`.
+
+`make verify CELL=ring_oscillator` → Magic DRC clean, netgen **"Circuits match uniquely"**
+vs [spice/ring_oscillator.spice](spice/ring_oscillator.spice).
+
+Honest note: the flat one-row floorplan is **correct but not compact** (~80 µm wide,
+tall routing channel). It's the right thing to get DRC/LVS-clean first; if PEX (§6) shows
+the long M3 tracks push key metrics past ±1%, the next step is a more compact floorplan
+(e.g. cs_stage tiled hierarchically with shared abutted rails).
+
+## 6. PEX results vs schematic (±1% check)
+_(to be filled — extract with `make magic-pex CELL=ring_oscillator`, sim freq vs ibias,
+compare to the pre-layout reference: 2 µA→69, 8 µA→278, 16 µA→550, 31 µA→775 MHz)_
 
 ## 6. Compensation elements added (with schematic update)
 _(to be filled)_
