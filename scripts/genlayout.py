@@ -44,6 +44,9 @@ DEVICES = {
                         ports=dict(D=(-0.255, 0.0), S=(0.255, 0.0), G=(0.0, 1.22), B=(0.0, -1.59))),
     "nmos_1_0p13": dict(kind="nmos", w=1.0,  l=0.13, fhw=1.225, fhh=1.55,
                         ports=dict(D=(-0.255, 0.0), S=(0.255, 0.0), G=(0.0, 0.72), B=(0.0, -1.09))),
+    # DAC current-source unit (Mpref / Msrc), long L for good matching
+    "pmos_2_1":    dict(kind="pmos", w=2.0,  l=1.0,  fhw=1.66,  fhh=2.05,
+                        ports=dict(D=(-0.69, 0.0), S=(0.69, 0.0), G=(0.0, 1.22), B=(0.0, -1.59))),
 }
 
 # routing geometry (um)

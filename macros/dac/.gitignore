@@ -1,0 +1,5 @@
+layout/_*
+layout/*.mag
+layout/*.ext
+verification/
+netlist/

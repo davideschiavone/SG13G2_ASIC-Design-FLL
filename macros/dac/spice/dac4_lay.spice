@@ -1,0 +1,80 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** LVS reference for the DAC LAYOUT (macros/dac/layout/dac4.gds).
+**
+** Two deliberate differences from the golden dac4.spice, both forced by physical reality:
+**   1. The IDEAL reference current source `Iref` is REMOVED and its node `vpcs` is exposed
+**      as a PIN. An ideal source is not silicon; in v1 the reference is idealised (see
+**      CLAUDE.md / dac4.spice) and a testbench (or the future on-chip reference) drives
+**      `vpcs`. Everything else is electrically identical.
+**   2. The binary weights are written as `mw` EXPLICIT UNIT DEVICES (w=2u/1u, m=1) instead
+**      of one device with `m={mw}`. The layout builds the weights from replicated unit
+**      devices (the gencell `m` only arrays unconnected fingers), and netgen merges
+**      parallel units by SUMMING width — so an `m={mw}` reference would mismatch on `w`.
+**      Using explicit units on both sides makes the merge identical. Same transistors,
+**      same connectivity, same currents.
+**
+** Ports:  VDD VSS b0 b1 b2 b3 iout vpcs
+.subckt dac_inv VDD VSS a y
+XMp y a VDD VDD sg13_lv_pmos w=1u   l=0.13u ng=1
+XMn y a VSS VSS sg13_lv_nmos w=0.5u l=0.13u ng=1
+.ends dac_inv
+
+* one unit current source (PMOS), drain = cs
+.subckt dac_src VDD vpcs cs
+XMsrc cs vpcs VDD VDD sg13_lv_pmos w=2u l=1u ng=1
+.ends dac_src
+
+* one unit steering pair: b -> iout, bb -> ndump (both from cs)
+.subckt dac_sw VSS b bb cs iout ndump
+XMto iout  b  cs VSS sg13_lv_nmos w=1u l=0.13u ng=1
+XMdo ndump bb cs VSS sg13_lv_nmos w=1u l=0.13u ng=1
+.ends dac_sw
+
+.subckt dac4 VDD VSS b0 b1 b2 b3 iout vpcs
+XMpref vpcs vpcs VDD VDD sg13_lv_pmos w=2u l=1u ng=1
+XMdump ndump ndump VSS VSS sg13_lv_nmos w=1u l=0.5u ng=1
+Xinv0 VDD VSS b0 b0b dac_inv
+Xinv1 VDD VSS b1 b1b dac_inv
+Xinv2 VDD VSS b2 b2b dac_inv
+Xinv3 VDD VSS b3 b3b dac_inv
+
+* bit 0 : 1 unit
+Xsrc0_0 VDD vpcs cs0 dac_src
+Xsw0_0  VSS b0 b0b cs0 iout ndump dac_sw
+
+* bit 1 : 2 units (share cs1)
+Xsrc1_0 VDD vpcs cs1 dac_src
+Xsrc1_1 VDD vpcs cs1 dac_src
+Xsw1_0  VSS b1 b1b cs1 iout ndump dac_sw
+Xsw1_1  VSS b1 b1b cs1 iout ndump dac_sw
+
+* bit 2 : 4 units (share cs2)
+Xsrc2_0 VDD vpcs cs2 dac_src
+Xsrc2_1 VDD vpcs cs2 dac_src
+Xsrc2_2 VDD vpcs cs2 dac_src
+Xsrc2_3 VDD vpcs cs2 dac_src
+Xsw2_0  VSS b2 b2b cs2 iout ndump dac_sw
+Xsw2_1  VSS b2 b2b cs2 iout ndump dac_sw
+Xsw2_2  VSS b2 b2b cs2 iout ndump dac_sw
+Xsw2_3  VSS b2 b2b cs2 iout ndump dac_sw
+
+* bit 3 : 8 units (share cs3)
+Xsrc3_0 VDD vpcs cs3 dac_src
+Xsrc3_1 VDD vpcs cs3 dac_src
+Xsrc3_2 VDD vpcs cs3 dac_src
+Xsrc3_3 VDD vpcs cs3 dac_src
+Xsrc3_4 VDD vpcs cs3 dac_src
+Xsrc3_5 VDD vpcs cs3 dac_src
+Xsrc3_6 VDD vpcs cs3 dac_src
+Xsrc3_7 VDD vpcs cs3 dac_src
+Xsw3_0  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_1  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_2  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_3  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_4  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_5  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_6  VSS b3 b3b cs3 iout ndump dac_sw
+Xsw3_7  VSS b3 b3b cs3 iout ndump dac_sw
+.ends dac4
