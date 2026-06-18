@@ -12,6 +12,8 @@ runs/
 backups/
 sim_build/
 obj_dir/
+*_obj_dir/
+*.so
 /tutorial/.quarto/
 /tutorial/_site/
 /doc/ihp-structure-proposals/gen_structure.py
