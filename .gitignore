@@ -2,6 +2,7 @@ drc_run_*
 lvs_run_*
 *.vcd
 *.fst
+*.raw.ascii
 *.raw
 *.log
 *.pyc

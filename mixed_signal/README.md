@@ -12,11 +12,21 @@ transistors, so it must be the master. A Verilog-master TB would need *behaviora
 analog models instead (that's the separate "Flow B": the Verilator TB +
 `ring_oscillator_verilog_behavioral`).
 
-## Build + run
+## Build + run (Makefile; via `../run.sh "make -C mixed_signal <target>"`)
+- `make build`  — Verilator-build `fll_digital.so` for `d_cosim`
+- `make sanity` — cosim sanity check (no analog): `dac_code_o` tracks `code_i`
+- `make sim`    — full mixed-signal cosim (writes an ASCII raw)
+- `make vcd`    — convert the raw → VCD (`raw2vcd.py`)
+- `make wave`   — convert + open the waveforms in **GTKWave** (on noVNC `:1`)
+- `make all`    — build + sim + wave
+
+## Viewing waveforms (GTKWave)
+ngspice writes a SPICE rawfile, which GTKWave can't read. `raw2vcd.py` converts the
+ASCII raw into a VCD whose nodes are `real` variables — GTKWave shows them as analog
+traces (so `ro_clk`/`nbias` appear as analog and `dac_code`/`fout` as 0/1.5 steps).
+The testbenches use `set filetype=ascii` so the raw is convertible. Open with:
 ```
-../run.sh "cd mixed_signal && ./build_cosim.sh"          # Verilog -> fll_digital.so
-../run.sh "cd mixed_signal && ngspice -b tb_cosim_sanity.spice"   # cosim sanity (no analog)
-../run.sh "cd mixed_signal && ngspice -b tb_mixed_dac_ro.spice"   # full mixed-signal
+../run.sh "make -C mixed_signal wave"        # converts + launches GTKWave on noVNC :1
 ```
 
 ## Files

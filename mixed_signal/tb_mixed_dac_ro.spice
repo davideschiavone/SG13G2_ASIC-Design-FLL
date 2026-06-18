@@ -54,6 +54,8 @@ tran 0.02n 0.8u 0 0.02n uic
 meas tran t20 TRIG v(ro_clk) VAL=0.75 RISE=20 TARG v(ro_clk) VAL=0.75 RISE=40
 let ro_mhz = 20.0/t20/1e6
 echo "code=8 -> RO freq = $&ro_mhz MHz (all-SPICE tb_dac_ro gave ~601 MHz)"
+* ASCII raw so it can be converted to VCD for GTKWave (python3 raw2vcd.py)
+set filetype=ascii
 write tb_mixed_dac_ro.raw v(ro_clk) v(fout) v(nbias) v(d0) v(d1) v(d2) v(d3) v(clk)
 .endc
 .end
