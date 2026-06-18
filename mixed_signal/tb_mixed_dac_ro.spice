@@ -1,0 +1,59 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** FULL mixed-signal co-simulation (Flow A):
+**   fll_digital (RTL via Verilator d_cosim)  ->  dac_code_o (digital)
+**     -> dac_bridge -> 4-bit current-steering DAC (transistors) -> bias current
+**     -> current-starved ring oscillator (transistors) -> ro_clk (analog)
+**     -> adc_bridge -> fll_digital.ro_clk_i -> /1024 divider -> fout
+** code_i fixed at 8 here; expect RO ~600 MHz (matches the all-SPICE tb_dac_ro).
+
+.lib cornerMOSlv.lib mos_tt
+.include ../macros/dac/spice/dac4.spice
+.include ../macros/ring_oscillator/spice/ring_oscillator.spice
+
+.param VDD=1.5
+
+* --- supplies (ramp VDD for RO start-up) ---
+VDD VDD 0 PWL(0 0 0.2u {VDD})
+VSS VSS 0 0
+
+* --- digital block (Verilator d_cosim) ---
+*   inputs:  clk reset_n ro_clk code3 code2 code1 code0
+*   outputs: dac3 dac2 dac1 dac0 fout      (dac0 = LSB)
+a1 [ clk rstn ro_clk c3 c2 c1 c0 ] [ d3 d2 d1 d0 fout ] fll_digital
+.model fll_digital d_cosim simulation="./fll_digital.so" delay=0
+
+* --- digital stimulus (analog sources -> auto adc_bridge) ---
+Vclk  clk  0 PULSE(0 {VDD} 0 0.1n 0.1n 9.9n 20n)     ; 50 MHz reference
+Vrstn rstn 0 PWL(0 0 40n 0 41n {VDD})                ; release reset at 41 ns
+* code = 8  (c3 c2 c1 c0 = 1 0 0 0)
+Vc3 c3 0 {VDD}
+Vc2 c2 0 0
+Vc1 c1 0 0
+Vc0 c0 0 0
+
+* --- DAC: bit inputs from dac_code_o (digital d0..d3 -> auto dac_bridge -> gates) ---
+Xdac VDD VSS d0 d1 d2 d3 nbias dac4
+
+* --- RO: biased by the DAC, output ro_clk (analog) also feeds the cosim input ---
+Xro VDD VSS nbias ro_clk ring_oscillator
+
+* probe fout as analog
+Cfo fout 0 1f
+
+.control
+pre_set auto_bridge_d_in =
++ ( ".model auto_adc adc_bridge(in_low='0.4*1.5' in_high='0.6*1.5' rise_delay=1e-11 fall_delay=1e-11)"
++   "auto_bridge%d [ %s ] [ %s ] auto_adc" )
+pre_set auto_bridge_d_out =
++ ( ".model auto_dac dac_bridge(out_low=0 out_high=1.5 t_rise=1e-11 t_fall=1e-11)"
++   "auto_bridge%d [ %s ] [ %s ] auto_dac" )
+tran 0.02n 0.8u 0 0.02n uic
+* RO frequency set by the digital code, measured in steady state
+meas tran t20 TRIG v(ro_clk) VAL=0.75 RISE=20 TARG v(ro_clk) VAL=0.75 RISE=40
+let ro_mhz = 20.0/t20/1e6
+echo "code=8 -> RO freq = $&ro_mhz MHz (all-SPICE tb_dac_ro gave ~601 MHz)"
+write tb_mixed_dac_ro.raw v(ro_clk) v(fout) v(nbias) v(d0) v(d1) v(d2) v(d3) v(clk)
+.endc
+.end
