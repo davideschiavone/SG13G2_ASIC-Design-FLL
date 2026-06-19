@@ -1,0 +1,85 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** RO design-margin EXPLORATION deck (not the golden TB).
+** A flat, parametrized 5-stage current-starved ring with the internal starved-supply
+** nodes pp_i/nn_i EXPOSED, so PEX-realistic lumped caps can be hung on EVERY node:
+**   ring nodes n1..n5  (PEX ~3.5-7 fF)   -> Cr / Cr5
+**   internal  pp_i/nn_i (PEX ~8 fF each) -> Cpp / Cnn
+** This reproduces (cheaply, no layout) the loop-gain collapse the extracted netlist
+** showed, and lets us size for ROBUST oscillation before touching the layout generator.
+** The caps here are CONSERVATIVE: they sit on TOP of the model's own junction caps, so a
+** design that oscillates here has margin to spare in the real (lower-cap) PEX.
+
+.lib cornerMOSlv.lib mos_tt
+
+* ---- design knobs (overridden per-run on the command line via .param) ----
+.param pwi=1u   nwi=0.5u  linv=0.13u      $ inverter pull-up / pull-down W, L
+.param cwp=2u   cwn=1u    lcs=0.5u        $ current-source (header/footer) W, L
+.param Cr=4f    Cr5=7f    Cpp=8f  Cnn=8f  $ PEX-realistic node loads
+.param VDDV=1.5
+.param IB=8u
+
+* ---- one current-starved stage, pp/nn EXPOSED ----
+.subckt cs VDD VSS vbp vbn in out pp nn
+XMcp pp  vbp VDD VDD sg13_lv_pmos w={cwp} l={lcs}  ng=1
+XMp  out in  pp  VDD sg13_lv_pmos w={pwi} l={linv} ng=1
+XMn  out in  nn  VSS sg13_lv_nmos w={nwi} l={linv} ng=1
+XMcn nn  vbn VSS VSS sg13_lv_nmos w={cwn} l={lcs}  ng=1
+.ends cs
+
+* ---- bias generation ----
+XMbn  ibias ibias VSS VSS sg13_lv_nmos w={cwn} l={lcs} ng=1
+XMmir vbp   ibias VSS VSS sg13_lv_nmos w={cwn} l={lcs} ng=1
+XMbp  vbp   vbp   VDD VDD sg13_lv_pmos w={cwp} l={lcs} ng=1
+
+* ---- 5 stages ----
+Xstg1 VDD VSS vbp ibias n5 n1 pp1 nn1 cs
+Xstg2 VDD VSS vbp ibias n1 n2 pp2 nn2 cs
+Xstg3 VDD VSS vbp ibias n2 n3 pp3 nn3 cs
+Xstg4 VDD VSS vbp ibias n3 n4 pp4 nn4 cs
+Xstg5 VDD VSS vbp ibias n4 n5 pp5 nn5 cs
+
+* ---- node loads (PEX-realistic) ----
+Cn1 n1 0 {Cr}
+Cn2 n2 0 {Cr}
+Cn3 n3 0 {Cr}
+Cn4 n4 0 {Cr}
+Cn5 n5 0 {Cr5}
+Cp1 pp1 0 {Cpp}
+Cp2 pp2 0 {Cpp}
+Cp3 pp3 0 {Cpp}
+Cp4 pp4 0 {Cpp}
+Cp5 pp5 0 {Cpp}
+Cm1 nn1 0 {Cnn}
+Cm2 nn2 0 {Cnn}
+Cm3 nn3 0 {Cnn}
+Cm4 nn4 0 {Cnn}
+Cm5 nn5 0 {Cnn}
+
+* ---- supplies + bias ----
+VDD VDD 0 PWL(0 0 0.2u {VDDV})
+VSS VSS 0 0
+Iref VDD ibias DC {IB}
+
+* ---- startup kick on n1 (a real RO starts from thermal noise SPICE lacks) ----
+Ikick VSS n1 PULSE(0 20u 0.25u 0.1n 0.1n 2n 1)
+
+.control
+  set wr_singlescale
+  echo "IB_uA    freq_MHz    Vpp_n5"
+  foreach ib 2u 4u 8u 16u 31u
+    alter Iref dc=$ib
+    tran 0.02n 2.0u 0 0.02n uic
+    * steady-state window 1.5u..2.0u
+    let t1 = 1.5u
+    meas tran vmax MAX v(n5) from=1.5u to=2.0u
+    meas tran vmin MIN v(n5) from=1.5u to=2.0u
+    let vpp = vmax - vmin
+    * frequency from 20 mid-rail crossings deep in steady state
+    meas tran tper TRIG v(n5) VAL=0.75 RISE=15 TARG v(n5) VAL=0.75 RISE=35
+    let fmhz = 20.0/tper/1e6
+    echo "  $ib  ->  $&fmhz MHz   Vpp= $&vpp V"
+  end
+.endc
+.end

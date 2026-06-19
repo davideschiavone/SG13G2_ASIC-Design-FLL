@@ -143,38 +143,92 @@ Two floorplans were built (history in git):
    the NMOS bulk sitting next to the `ibias` track (→ move the track); and thin power
    routing leaving kΩ of series R (→ wide VDD/VSS straps).
 
-## 6. PEX results — cap fixed ~8×; oscillation reveals a DESIGN-margin issue (honest)
+## 6. PEX oscillation — ROOT CAUSE was two testbench bugs, NOT a design-margin defect
 
-The 2-row layout's parasitic **capacitance** problem is solved (ring nodes < 8 fF vs
-~60 fF flat). **But the extracted RO does not sustain oscillation**, and digging in shows
-this is **not** a layout/routing defect:
+**Correction to an earlier conclusion.** A previous pass reported the extracted RO "does
+not sustain oscillation … the v1 current-starved RO is a marginal oscillator." That was
+**wrong**, and the wrong diagnosis came from two bugs in the *post-layout testbench*, not
+from the silicon. With both fixed, **the extracted (full-RC) RO oscillates full-swing and
+monotonically across the whole bias range, with enormous startup margin.** The v1 design
+and the 2-row layout are kept unchanged (no device resize).
 
-- Schematic ([spice/ring_oscillator.spice](spice/ring_oscillator.spice)) oscillates
-  full-swing; **even with 3 fF lumped on every ring node it still oscillates.**
-- The **extracted netlist does not oscillate** — tested device-only, C-only, and full-RC;
-  with and without a differential startup kick on a labelled ring node; at 16/31/60 µA.
-  It settles to the metastable mid-rail point every time.
-- The flat layout *appeared* to oscillate (37 MHz at 31 µA) only because its large
-  parasitic cross-coupling perturbed the ring — an artifact the clean 2-row removes.
+### Bug 1 (the real killer): scrambled supplies from a port-order mismatch
+Magic's extractor emits the `.subckt` ports in the order the layout's `port make <i>`
+labels were created, which was **`ibias VDD VSS clk`** — *not* the schematic subckt order
+`VDD VSS ibias clk`. `tb_ring_oscillator_pex.spice` instantiates **positionally**
+(`Xro VDD VSS nbias clk ring_oscillator`), so the circuit's `ibias` pin was tied to the VDD
+net, its `VDD` pin to the VSS net, and its `VSS` pin to the bias node. With the supplies
+scrambled the extracted RO is **dead** — and no startup kick can ever revive a circuit
+whose VDD pin sits at ground. netgen LVS still passed because it matches ports **by name**,
+not by position, so the mismatch was invisible to LVS.
 
-Conclusion: the **v1 current-starved RO is a marginal oscillator** — the aggressive
-current-starving gives low per-stage loop gain, and once realistic device parasitics are
-included the loop no longer robustly starts/sustains. This is a **design-margin** finding
-surfaced by extraction, not a layout bug (LVS is clean). The fix is a *design* change
-(less starving / stronger or fewer stages / a startup-assist), which updates the schematic
-too — out of scope for a pure layout pass.
+**Fix:** the generator now pins the extracted port order to the schematic order via
+`lo.port_order = ["VDD","VSS","ibias","clk"]` ([scripts/gen_ro_layout.py](scripts/gen_ro_layout.py)),
+and both testbenches carry a comment that positional instantiation must match it. After
+regen + re-extract, `.subckt ring_oscillator VDD VSS ibias clk` and the positional TB is
+correct.
 
-### Why ±1% on RO frequency is not physically achievable anyway
-Even a perfect layout adds interconnect capacitance, and an RO's frequency is set by node
-capacitance (f ∝ 1/C). The schematic reference has **zero** interconnect C, so any real
-layout shifts the frequency by **far more than 1 %** (a minimal ~1 µm wire on a ~3 fF node
-is already several %). A literal ±1 % vs the ideal schematic is therefore impossible for an
-oscillator; the meaningful check is PEX vs a **PEX-aware reference** (or re-baselining the
-spec to the extracted result). This is the place the methodology's "if you add an element
-to optimise the layout, add it to the schematic too" would apply — by back-annotating the
-extracted ring-node load into the SPICE reference.
+### Bug 2 (secondary): no startup symmetry-breaker for the *symmetric* schematic
+SPICE has no thermal noise. A perfectly symmetric, noiseless ring started by a supply ramp
+alone can sit at its mid-rail metastable point forever. This is why the **schematic** sweep
+silently produced no result at the low-bias corner (2 µA). The **extracted** ring self-
+starts even without a kick — its parasitics are slightly asymmetric (n5 ≈ 7 fF vs ≈ 3.5 fF
+on the others), and that mismatch seeds the oscillation — but relying on that is fragile.
 
-Reproduce: `make pex CELL=ring_oscillator` then the startup/oscillation checks above.
+**Fix:** both testbenches now inject a tiny current kick on one ring node
+(`Ikick VSS Xro.n1 PULSE(0 1u 0.25u 0.1n 0.1n 1n 1)`) as a thermal-noise stand-in. It is a
+deliberate over-estimate of real noise: PEX startup was verified down to a **1 nA·2 ns
+(~0.5 mV)** perturbation at the worst corner (2 µA) — i.e. >1000× of margin — so loop gain
+is comfortably > 1 ([testbenches/spice/tb_ro_pex_margin.spice](testbenches/spice/tb_ro_pex_margin.spice)). On silicon, thermal noise plus power-up asymmetry start it with no
+help; the kick exists only so the noiseless simulator leaves the metastable point.
 
-## 6. Compensation elements added (with schematic update)
-_(to be filled)_
+### Result — robust, monotonic oscillation (full-RC PEX, mos_tt, VDD=1.5 V)
+
+| I_bias | schematic f (`make sim`) | PEX full-RC f (`make sim-pex`) |
+| ------ | ------------------------ | ------------------------------ |
+| 2 µA   | 69.3 MHz   | 33.8 MHz |
+| 4 µA   | 130.5 MHz  | 64.8 MHz |
+| 8 µA   | 277.7 MHz  | 126.8 MHz |
+| 16 µA  | 550.3 MHz  | 239.5 MHz |
+| 31 µA  | 774.5 MHz  | 386.9 MHz |
+
+(Both columns measured on the buffered `clk` output.) Full swing (Vpp ≈ 1.35–1.40 V) at
+every bias; monotonic over a ~10× tuning range,
+tens-to-hundreds of MHz — exactly the usable range targeted. The PEX frequency is ~2×
+lower than the schematic because the extracted ring/internal nodes carry real interconnect
++ junction capacitance the ideal schematic lacks (f ∝ 1/C) — see §7. Reproduce:
+`make pex CELL=ring_oscillator && make sim-pex` (and `make sim` for the schematic golden).
+
+### Note on the old "8 fF on the internal pp/nn nodes"
+Per-node PEX totals do show the internal starved-supply nodes (the inverter sources
+`Mp/S`=pp, `Mn/S`=nn) carrying ~8 fF each — more than the ring nodes (~3.5 fF) — because the
+long-L (0.5 µm), wide current-source devices have large junction area. That loading lowers
+the frequency but does **not** stop oscillation: a margin deck that hangs the full PEX node
+loads (8 fF on pp/nn, 4/7 fF on the ring) as lumped caps on the ideal devices still
+oscillates full-swing across 2→31 µA ([testbenches/spice/tb_ro_explore.spice](testbenches/spice/tb_ro_explore.spice)).
+The loop gain was never the problem.
+
+## 7. Why ±1 % (PEX vs schematic) is dropped for the RO
+
+An oscillator's frequency is set by node capacitance (**f ∝ 1/C**). The schematic reference
+has **zero** interconnect capacitance, so any real layout shifts f by **far more than 1 %**
+— here the full-RC PEX runs ~2× below the schematic, dominated by genuine ring-node and
+internal-node parasitics, not by a layout defect. A minimal ~1 µm wire on a ~3 fF node is
+already several percent. A literal ±1 % vs the ideal schematic is therefore **physically
+impossible** for an RO, and chasing it would be meaningless.
+
+**Replacement success criterion (agreed with the owner):**
+1. The full-RC PEX layout **oscillates at every bias** in range (2 → 31 µA) from the TB
+   startup (a documented thermal-noise-stand-in kick is allowed). ✓
+2. **Frequency is monotonic** in bias current and the range is usable (tens-to-hundreds of
+   MHz). ✓ (table above)
+3. **DRC clean**, LVS **"Circuits match uniquely"**, and schematic ↔ layout consistent. ✓
+
+If a single number is still wanted, compare PEX against a **PEX-aware reference** — back-
+annotate the *exact* extracted per-node loads into the SPICE reference (the methodology's
+"if you add an element to optimise the layout, add it to the schematic too"), then the two
+match by construction. The lumped-cap deck `tb_ro_explore.spice` is a first cut at this
+(hangs approximate PEX node loads on ideal devices); it oscillates full-swing across the
+range but is **not** frequency-calibrated — it under-loads vs the true distributed RC, so
+it lands between the schematic and PEX rather than on PEX. Its role here is to prove **loop
+gain is fine under realistic loading**, not to reproduce the frequency.

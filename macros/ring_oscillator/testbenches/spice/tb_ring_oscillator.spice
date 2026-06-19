@@ -20,6 +20,16 @@ Iref VDD nbias DC 8u
 
 Xro VDD VSS nbias clk ring_oscillator
 
+* --- Startup symmetry-breaker (thermal-noise stand-in) ---
+* SPICE has no thermal noise, so a perfectly symmetric, noiseless ring sits at its mid-rail
+* metastable point forever. On silicon, thermal noise (and power-up asymmetry) starts it.
+* A tiny, brief current kick on ONE ring node breaks the symmetry; once the loop gain (>1)
+* takes over it grows to full swing. 1uA*1ns (~0.3 mV on a ~4 fF node) is a deliberate
+* over-estimate of that noise — the loop actually starts from a perturbation >1000x smaller
+* (verified down to 1 nA*2 ns in PEX), i.e. there is ample startup margin. Without this the
+* low-bias corner (2 uA) fails to start in sim — a TB artifact, not a design defect.
+Ikick VSS Xro.n1 PULSE(0 1u 0.25u 0.1n 0.1n 1n 1)
+
 .control
   set wr_singlescale
   echo "Ibias_uA   freq_MHz"

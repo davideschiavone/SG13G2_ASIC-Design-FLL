@@ -5,3 +5,6 @@ layout/*.ext
 # Verification / extraction outputs
 verification/
 netlist/
+# Generated artifacts copied into the testbench dir by `make pex` / ngspice
+testbenches/spice/ring_oscillator_pex.spice
+testbenches/spice/*.raw

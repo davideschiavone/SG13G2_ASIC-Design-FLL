@@ -61,6 +61,9 @@ class Layout:
         self.lines = []
         self.insts = {}
         self.ports = []
+        self.port_order = None   # optional canonical port order (list of net names) so the
+                                 # extracted .subckt port order matches the SPICE subckt —
+                                 # a positional TB (e.g. tb_*_pex) needs them to agree.
         self.netlabels = []      # (net, layer, x, y) plain labels (name a net, not a port)
         self.local_tracks = []   # list of (y, [ (x0,x1), ... ]) for the local M3 allocator
 
@@ -234,6 +237,9 @@ class Layout:
             self.ports.append((net, port_layer, xs[0], ty))
 
     def finish(self, outdir):
+        if self.port_order is not None:
+            rank = {n: i for i, n in enumerate(self.port_order)}
+            self.ports.sort(key=lambda p: rank.get(p[0], len(rank)))
         for i, (net, layer, x, y) in enumerate(self.ports):
             self._emit(f"box {x:.3f}um {y:.3f}um {x:.3f}um {y:.3f}um")
             self._emit(f"label {net} center {layer}")
@@ -282,6 +288,11 @@ def build_ring_oscillator(outdir, mkport=True):
     lo = Layout("ring_oscillator")
     lo.header()
     lo.begin_cell()
+    # Extracted .subckt port order MUST match spice/ring_oscillator.spice (VDD VSS ibias clk)
+    # so the positional PEX testbench (tb_ring_oscillator_pex.spice) connects them correctly.
+    # netgen LVS matches by NAME so it passed regardless, but a positional SPICE instance does
+    # not — an earlier mismatch scrambled the supplies and made the extracted RO look dead.
+    lo.port_order = ["VDD", "VSS", "ibias", "clk"]
 
     P = 3.6          # column pitch
     yp, yn = 3.6, -3.6   # PMOS / NMOS row centres; channel is the empty band around y=0

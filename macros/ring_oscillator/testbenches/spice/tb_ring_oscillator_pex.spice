@@ -15,7 +15,15 @@ VDD VDD 0 PWL(0 0 0.2u {VDDV})
 VSS VSS 0 0
 Iref VDD nbias DC 8u
 
+* Port order MUST be the extracted .subckt order, which the layout generator pins to the
+* schematic order VDD VSS ibias clk (gen_ro_layout.py: lo.port_order). netgen LVS matches by
+* name, so an order mismatch passes LVS but silently scrambles the supplies in a positional
+* SPICE instance like this one — which is what made the extracted RO look dead before.
 Xro VDD VSS nbias clk ring_oscillator
+
+* Startup symmetry-breaker (thermal-noise stand-in) — see tb_ring_oscillator.spice for the
+* rationale. The extracted ring nodes are labelled n1..n5; kick the first one.
+Ikick VSS Xro.n1 PULSE(0 1u 0.25u 0.1n 0.1n 1n 1)
 
 .control
   set wr_singlescale

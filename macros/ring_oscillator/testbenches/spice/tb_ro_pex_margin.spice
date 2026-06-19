@@ -1,0 +1,31 @@
+** SPDX-FileCopyrightText: 2026 Davide Schiavone
+** SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+**
+** PEX startup-MARGIN probe (diagnostic, not the golden TB). Worst corner (2uA). Sweep the
+** kick charge from large down to tiny; if even a tiny perturbation grows to full swing, the
+** small-signal loop gain is comfortably > 1 (ample startup margin). Kick = Ikick*2ns onto
+** Xro.n1 (~4fF ring node): dV ~ Ikick*2n/4f. Result: starts from 1nA*2ns (~0.5mV) -> proves
+** the extracted RO is NOT a marginal oscillator. Run: ngspice -b tb_ro_pex_margin.spice
+** (needs ring_oscillator_pex.spice in this dir, produced by `make pex`).
+.lib cornerMOSlv.lib mos_tt
+.include ring_oscillator_pex.spice
+.param VDDV=1.5
+VDD VDD 0 PWL(0 0 0.2u {VDDV})
+VSS VSS 0 0
+Iref VDD nbias DC 2u
+Xro nbias VDD VSS clk ring_oscillator
+* kick amplitude swept by .control 'alter'
+Ikick VSS Xro.n1 PULSE(0 1u 0.25u 0.1n 0.1n 2n 1)
+.control
+  set wr_singlescale
+  echo "kick_uA  approx_dV_mV   Vpp_n5(steady)"
+  foreach kk 1u 100n 10n 1n
+    alter @Ikick[pulse] = [ 0 $kk 0.25u 0.1n 0.1n 2n 1 ]
+    tran 0.02n 4.0u 0 0.02n uic
+    meas tran vmax MAX v(Xro.n5) from=3.0u to=4.0u
+    meas tran vmin MIN v(Xro.n5) from=3.0u to=4.0u
+    let vpp = vmax-vmin
+    echo "  kick=$kk  ->  Vpp= $&vpp V"
+  end
+.endc
+.end
