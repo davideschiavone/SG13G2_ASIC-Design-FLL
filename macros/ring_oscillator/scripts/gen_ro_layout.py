@@ -61,6 +61,7 @@ class Layout:
         self.lines = []
         self.insts = {}
         self.ports = []
+        self.netlabels = []      # (net, layer, x, y) plain labels (name a net, not a port)
         self.local_tracks = []   # list of (y, [ (x0,x1), ... ]) for the local M3 allocator
 
     def _emit(self, s):
@@ -83,12 +84,15 @@ class Layout:
     def begin_cell(self):
         pass
 
-    def place(self, inst, devkey, cx, cy):
+    def place(self, inst, devkey, cx, cy, flipy=False):
         self.make_device(devkey)
         var = self.devseen[devkey]
         self._emit(f"getcell ${var} child 0 0 parent {round(cx * UM_TO_IU)} {round(cy * UM_TO_IU)}")
         self._emit(f"identify {inst}")
-        self.insts[inst] = (devkey, cx, cy)
+        if flipy:
+            self._emit(f"select cell {inst}")
+            self._emit("upsidedown")   # mirror in y so the gate faces the channel
+        self.insts[inst] = (devkey, cx, cy, flipy)
 
     def place_row(self, specs, gap=0.7, y=0.0):
         cx, prev_fhw = 0.0, None
@@ -100,9 +104,9 @@ class Layout:
             prev_fhw = fhw
 
     def port_xy(self, inst, term):
-        devkey, cx, cy = self.insts[inst]
+        devkey, cx, cy, flipy = self.insts[inst]
         dx, dy = DEVICES[devkey]["ports"][term]
-        return (cx + dx, cy + dy)
+        return (cx + dx, cy + (-dy if flipy else dy))
 
     # ---- painting ----
     def rect(self, layer, x0, y0, x1, y1):
@@ -127,19 +131,38 @@ class Layout:
         h = s / 2.0
         self.rect("via3", x - h, y - h, x + h, y + h)
 
-    # ---- global net router (M4 jogs + high M3 track) ----
-    def route_net(self, net, terms, track_y, mkport=False, port_layer="m3"):
+    def via1_pad(self, x, y, s=VIA_S):
+        """M1->M2 contact at a device terminal (so a local M2 wire can attach)."""
+        h = s / 2.0
+        self.rect("m1", x - h, y - h, x + h, y + h)
+        self.rect("via1", x - h, y - h, x + h, y + h)
+
+    def via12_pad(self, x, y, s=VIA_S):
+        """M1->M2->M3 contact (for dropping a global M3 rail onto a terminal)."""
+        h = s / 2.0
+        for lyr in ("m1", "via1", "via2"):
+            self.rect(lyr, x - h, y - h, x + h, y + h)
+
+    # ---- global net router (vertical jogs on `top`, horizontal track on M3) ----
+    def route_net(self, net, terms, track_y, mkport=False, port_layer="m3", top="m4", w=WIRE_W):
+        """top='m4' (default) routes jogs on M4; top='m3' on M3. Two global nets whose
+        terminals share an x (e.g. a device's gate and bulk at centre-x) must use
+        different `top` layers so their coincident verticals don't short. `w` widens the
+        track/jogs — use a wide low-R strap for the VDD/VSS power rails (thin power routing
+        leaves kohms of series R that collapses the oscillation)."""
+        jog = top
         pts = [self.port_xy(i, t) for (i, t) in terms]
         xs = [p[0] for p in pts]
         if len(pts) > 1:
-            self.hwire("m3", track_y, min(xs) - 0.1, max(xs) + 0.1)
+            self.hwire("m3", track_y, min(xs) - 0.1, max(xs) + 0.1, w=w)
         for (px, py) in pts:
-            self.via_stack(px, py, top="m4")
-            self.vwire("m4", px, py, track_y)
-            self.via3_at(px, track_y)
+            self.via_stack(px, py, top=top)            # small via (clears centre-x neighbours)
+            self.vwire(jog, px, py, track_y)           # thin jog (clears centre-x neighbours)
+            if top == "m4":
+                self.via3_at(px, track_y)   # M4 jog -> M3 track
         if len(pts) == 1:
             px, py = pts[0]
-            self.hwire("m3", track_y, px - 0.15, px + 0.15)
+            self.hwire("m3", track_y, px - 0.15, px + 0.15, w=w)
         if mkport:
             self.ports.append((net, port_layer, xs[0], track_y))
 
@@ -152,6 +175,43 @@ class Layout:
         y = base + len(self.local_tracks) * pitch
         self.local_tracks.append((y, [(x0, x1)]))
         return y
+
+    def route_ring(self, net, terms, hop_y, mkport=False):
+        """Proper 2-layer channel router: a horizontal M2 trunk at hop_y (in the empty
+        channel between the P and N rows) and per-column VERTICAL STUBS ON M3. Trunk (M2)
+        and stubs (M3) are on different layers, so a stub crossing another net's trunk does
+        NOT short — only the net's own via2 connects them. Drain stubs are jogged ~1.3 um
+        left into the inter-column gap so they clear the gate stub of the same column (the
+        device puts drain and gate only 0.255 um apart). Ring nodes thus become short,
+        isolated wires -> the coupling-heavy parallel-track field is gone."""
+        pts = [(self.port_xy(i, t), t) for (i, t) in terms]
+        xs = [p[0][0] for p in pts]
+        # group terminals by x-column
+        cols = {}
+        for ((px, py), t) in pts:
+            cols.setdefault(round(px, 2), []).append((px, py, t))
+        via_xs = []
+        for xc, members in cols.items():
+            is_gate = any(t == "G" for (_, _, t) in members)
+            for (mx, my, t) in members:
+                self.via12_pad(mx, my)                    # M1->M2->M3 at the terminal
+            if is_gate:
+                vx = xc                                   # gate stub: M3 vertical at the gate
+            else:
+                vx = xc - 1.3                             # drain stub: jog left into the gap
+                for (mx, my, t) in members:
+                    self.hwire("m3", my, vx, mx)          # short M3 jog from drain to vx
+            ys = [py for (_, py, _) in members]
+            self.vwire("m3", vx, min(ys + [hop_y]), max(ys + [hop_y]))
+            via_xs.append(vx)
+        # M2 trunk spanning all stub columns + a via2 (M2<->M3) at each stub
+        self.hwire("m2", hop_y, min(via_xs) - 0.1, max(via_xs) + 0.1)
+        for vx in via_xs:
+            self.rect("via2", vx - VIA_S / 2, hop_y - VIA_S / 2, vx + VIA_S / 2, hop_y + VIA_S / 2)
+        # non-port net label so the ring node is reachable in sim/PEX (e.g. startup kick)
+        self.netlabels.append((net, "m2", min(via_xs) + 0.2, hop_y))
+        if mkport:
+            self.ports.append((net, "m2", via_xs[0], hop_y))
 
     def route_local(self, net, terms, mkport=False, port_layer="m3"):
         """Like route_net (M4 vertical jogs at unique x + M3 horizontal track at unique y,
@@ -178,6 +238,10 @@ class Layout:
             self._emit(f"box {x:.3f}um {y:.3f}um {x:.3f}um {y:.3f}um")
             self._emit(f"label {net} center {layer}")
             self._emit(f"port make {i + 1}")
+        # plain net labels (named nets, not ports) for sim/PEX node access
+        for (net, layer, x, y) in self.netlabels:
+            self._emit(f"box {x:.3f}um {y:.3f}um {x:.3f}um {y:.3f}um")
+            self._emit(f"label {net} center {layer}")
         self._emit("select top cell")
         self._emit(f"save {self.cell}")
         self._emit("writeall force")
@@ -211,20 +275,33 @@ def build_cs_stage(outdir, mkport=True):
 
 
 def build_ring_oscillator(outdir, mkport=True):
-    """Full current-starved ring oscillator, COMPACT: bias + 5 clustered stages + buffer.
-       Ports: VDD VSS ibias clk."""
+    """Full current-starved ring oscillator, 2-ROW (PMOS over NMOS) with channel routing.
+       Ring nodes are short, isolated wires in the empty channel between the rows -> the
+       dense parallel-track field (which dumped ~60 fF of coupling onto every ring node in
+       the flat layout) is gone. Ports: VDD VSS ibias clk."""
     lo = Layout("ring_oscillator")
     lo.header()
     lo.begin_cell()
 
-    # device row: bias | stage1..5 (each clustered: Mcp Mp Mn Mcn) | buffer
-    row = [("Mbn", "nmos_1_0p5"), ("Mmir", "nmos_1_0p5"), ("Mbp", "pmos_2_0p5")]
+    P = 3.6          # column pitch
+    yp, yn = 3.6, -3.6   # PMOS / NMOS row centres; channel is the empty band around y=0
+
+    # ---- placement: column k at x = k*P; PMOS in the top row, NMOS in the bottom row ----
+    # bias: col0 (Mbp top, Mbn bot), col1 (Mmir bot). Mp_i (inverter pull-up) is FLIPPED so
+    # its gate faces the channel next to Mn_i's gate.
+    lo.place("Mbp", "pmos_2_0p5", 0 * P, yp)
+    lo.place("Mbn", "nmos_1_0p5", 0 * P, yn)
+    lo.place("Mmir", "nmos_1_0p5", 1 * P, yn)
     for i in range(1, 6):
-        row += [(f"Mcp{i}", "pmos_2_0p5"), (f"Mp{i}", "pmos_1_0p13"),
-                (f"Mn{i}", "nmos_0p5_0p13"), (f"Mcn{i}", "nmos_1_0p5")]
-    row += [("Mb1p", "pmos_1_0p13"), ("Mb1n", "nmos_0p5_0p13"),
-            ("Mb2p", "pmos_2_0p13"), ("Mb2n", "nmos_1_0p13")]
-    lo.place_row(row, gap=0.7)
+        ca, cb = (2 + 2 * (i - 1)) * P, (3 + 2 * (i - 1)) * P
+        lo.place(f"Mcp{i}", "pmos_2_0p5", ca, yp)
+        lo.place(f"Mcn{i}", "nmos_1_0p5", ca, yn)
+        lo.place(f"Mp{i}", "pmos_1_0p13", cb, yp, flipy=True)
+        lo.place(f"Mn{i}", "nmos_0p5_0p13", cb, yn)
+    lo.place("Mb1p", "pmos_1_0p13", 12 * P, yp, flipy=True)
+    lo.place("Mb1n", "nmos_0p5_0p13", 12 * P, yn)
+    lo.place("Mb2p", "pmos_2_0p13", 13 * P, yp, flipy=True)
+    lo.place("Mb2n", "nmos_1_0p13", 13 * P, yn)
 
     nets = {}
 
@@ -246,18 +323,29 @@ def build_ring_oscillator(outdir, mkport=True):
     add("Mb2p", D="clk", G="b1", S="VDD", B="VDD")
     add("Mb2n", D="clk", G="b1", S="VSS", B="VSS")
 
-    # GLOBAL DC nets on the upper M4 tracks (their parasitics don't set the frequency)
+    # GLOBAL DC nets on rails at the row periphery (far from the channel -> they don't
+    # load the ring nodes): VDD/vbp high, VSS/ibias low.
     ports = {"VDD", "VSS", "ibias", "clk"}
-    lo.route_net("VDD",   nets.pop("VDD"),   track_y=-2.7, mkport=mkport)
-    lo.route_net("VSS",   nets.pop("VSS"),   track_y=-3.3, mkport=mkport)
-    lo.route_net("vbp",   nets.pop("vbp"),   track_y=8.0)
-    lo.route_net("ibias", nets.pop("ibias"), track_y=8.6, mkport=mkport)
-    # LOCAL signal nets (ring nodes, internal pp/nn, buffer) on packed low M3 tracks
-    for net in ["n1", "n2", "n3", "n4", "n5", "b1",
-                "pp1", "pp2", "pp3", "pp4", "pp5",
-                "nn1", "nn2", "nn3", "nn4", "nn5"]:
-        lo.route_local(net, nets.pop(net))
-    lo.route_local("clk", nets.pop("clk"), mkport=mkport)
+    # vbp/ibias on M3, VDD/VSS on M4 — so the current-source gate (vbp/ibias) and bulk
+    # (VDD/VSS), which sit at the same device centre-x, route on different layers and the
+    # coincident vertical jogs don't short.
+    # Track lanes (no crossings): vbp/ibias on M3 just above the gates; VDD/VSS on M4 up
+    # top (their M4 bulk jogs cross the M3 tracks freely). pp/nn (M4 jogs, M3 track) sit
+    # between, not crossed on their own layer.
+    lo.route_net("vbp",   nets.pop("vbp"),   track_y=5.0,  top="m3")
+    lo.route_net("ibias", nets.pop("ibias"), track_y=-4.0, mkport=mkport, top="m3")
+    lo.route_net("VDD",   nets.pop("VDD"),   track_y=8.0,  mkport=mkport, top="m4", w=1.5)
+    lo.route_net("VSS",   nets.pop("VSS"),   track_y=-8.0, mkport=mkport, top="m4", w=1.5)
+    # RING NODES in the channel (alternating trunk heights so neighbours don't overlap)
+    ring_hop = {"n1": 0.0, "n2": 0.7, "n3": 0.0, "n4": 0.7, "n5": -0.7}
+    for net, hy in ring_hop.items():
+        lo.route_ring(net, nets.pop(net), hop_y=hy)
+    lo.route_ring("b1", nets.pop("b1"), hop_y=0.0)
+    lo.route_ring("clk", nets.pop("clk"), hop_y=0.7, mkport=mkport)
+    # internal starved-supply nodes pp_i (top row) / nn_i (bottom row): short M3 in-row
+    for i in range(1, 6):
+        lo.route_net(f"pp{i}", nets.pop(f"pp{i}"), track_y=yp + 2.0)
+        lo.route_net(f"nn{i}", nets.pop(f"nn{i}"), track_y=yn - 2.0)
     assert not nets, f"unrouted nets: {list(nets)}"
 
     lo.finish(outdir)
