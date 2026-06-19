@@ -1,7 +1,20 @@
 # Next session — prompt: redesign the RO schematic for robust oscillation
 
-Paste the STARTER MESSAGE block at the bottom to begin. CLAUDE.md and the project memory
-load automatically; this file is the task statement + all the context you need.
+> **RESOLVED (2026-06-19, commit `6c64cc2`) — NO redesign was needed.** The premise below
+> (that the v1 current-starved RO is a *marginal oscillator*) was **wrong**. The extracted
+> full-RC RO oscillates full-swing and monotonically across the whole 2–31 µA range with
+> >1000× startup margin; the v1 silicon and 2-row layout are unchanged. The "PEX won't
+> oscillate" failure came from **two testbench bugs**:
+> 1. **Port-order scramble** — the extracted subckt is `ibias VDD VSS clk`, but the PEX TB
+>    instantiated it positionally as `VDD VSS ibias clk`, tying VDD to the ground net (dead
+>    circuit). netgen LVS matches by name so it passed and hid this. Fixed by pinning the
+>    generator's extracted port order to the schematic order (`lo.port_order`).
+> 2. **No startup symmetry-breaker** — a noiseless symmetric ring sits at mid-rail in SPICE.
+>    Fixed with a tiny documented kick (thermal-noise stand-in) in both golden TBs.
+>
+> Results, ±1 % rationale, and full write-up: `macros/ring_oscillator/RING_OSCILLATOR_LAYOUT.md`
+> §6–7. `make sim` / `make sim-pex` both pass. Owner confirmed: keep v1 silicon.
+> The original task text below is kept for historical context only.
 
 ---
 
