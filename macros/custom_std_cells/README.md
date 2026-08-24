@@ -54,6 +54,7 @@ layer it runs** — `make spice` does not build `tb/sv/`, and `make verilator` d
 | `sv` | both digital simulators |
 | `spice` | run the transistor-level testbenches with ngspice |
 | `all` | `sv` then `spice` |
+| `plot` | open the SPICE analog waveforms in ngspice's own plotter (`TB=tb_<module>`) |
 | `wave-sv` | open a SystemVerilog waveform in GTKWave (`TB=tb_<module>`) |
 | `wave-spice` | open a SPICE waveform in GTKWave (`TB=tb_<module>`) |
 | `clean` | delete the whole generated `tb/` directory |
@@ -141,18 +142,40 @@ subckt keeps the plain module name; the implementation from `aion_cells.v` is re
 `reference_<module>` in `tb/spice/reference_cells.spice`, so there is never any doubt which one a
 message refers to.
 
-### Waveforms
+### Analog waveforms, the ngspice way
 
-Off by default in both layers. The quickest route is one `wave` target per layer — it simulates
-with dumping on, converts if needed, and opens GTKWave:
+For the SPICE layer the most direct route is ngspice's own plotter, straight off the rawfile with
+no conversion — the same idea as `make plot` in `mixed_signal/`:
 
 ```bash
-./run.sh "make -C macros/custom_std_cells wave-sv    TB=tb_AION_nand2_11"
-./run.sh "make -C macros/custom_std_cells wave-spice TB=tb_AION_nand2_11"
+make -C macros/custom_std_cells plot TB=tb_AION_nand2_11
 ```
 
-**GTKWave is a GUI**, so run those from a terminal on the noVNC desktop
-(http://localhost/?password=abc123) — a headless `./run.sh` will just block. `DISPLAY` defaults
+It simulates with `RAW=1` if needed, then runs the generated `tb_<module>.plot.spice`, which loads
+`build/tb_<module>.raw` and opens one window per group: the input vector and the strobe, each
+output as gold vs reference (vs custom), and the mismatch flags. ngspice stays at its prompt with
+the windows open, so you can keep going by hand — `plot v(xref.w0)`, `print`, `meas` — and `quit`
+when done.
+
+The script is plain ngspice, so it works directly too:
+
+```bash
+cd macros/custom_std_cells/tb/spice && DISPLAY=:1 ngspice tb_AION_nand2_11.plot.spice
+```
+
+### Waveforms in GTKWave
+
+Off by default in both layers. One `wave` target per layer simulates with dumping on, converts if
+needed, and opens GTKWave:
+
+```bash
+make -C macros/custom_std_cells wave-sv    TB=tb_AION_nand2_11
+make -C macros/custom_std_cells wave-spice TB=tb_AION_nand2_11
+```
+
+**`plot`, `wave-sv` and `wave-spice` are GUI targets: run them from a terminal on the noVNC
+desktop** (http://localhost/?password=abc123), not through `./run.sh` — `plot` needs an
+interactive terminal as well as a display, so a headless call cannot drive it. `DISPLAY` defaults
 to `:1`, the noVNC display.
 
 To only produce the files, without opening anything — these are headless, so `./run.sh` is fine.

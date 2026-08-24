@@ -120,6 +120,11 @@ all: ## Run every testbench: SystemVerilog and SPICE
 .PHONY: all
 
 
+plot: ## Open the analog waveforms in ngspice's own plotter (usage: make plot TB=tb_<module>)
+	@$(ENSURE_SPICE)
+	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice plot $(if $(TB),TB=$(TB),)
+.PHONY: plot
+
 wave-sv: ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
 	@$(ENSURE_SV)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv wave $(if $(TB),TB=$(TB),)
