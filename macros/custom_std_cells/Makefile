@@ -59,43 +59,53 @@ help: ## Show this help message
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 .PHONY: help
 
+# What tb/ was last generated from. MODULE= and CUSTOM= change *which* testbenches are
+# emitted, which no file timestamp can express, so the signature is recorded and compared:
+# changing either -- including dropping them again to get the full set back -- regenerates.
+TB_STAMP := $(TB_DIR)/.generated
+TB_SIG   := $(TB_DIR)/.gen_sig
+GEN_SIG  := $(strip $(MODULE)|$(CUSTOM))
+
 generate: ## Regenerate tb/sv and tb/spice from the netlist and the PDK
 	python3 $(GEN) $(NETLIST) $(GEN_FLAGS)
+	@touch $(TB_STAMP) && printf '%s' '$(GEN_SIG)' > $(TB_SIG)
 .PHONY: generate
 
-# Only auto-regenerate when nothing was generated yet or the inputs moved on. A run that
-# passes CUSTOM= or MODULE= always regenerates, since those change what is emitted.
-$(TB_DIR)/sv/Makefile $(TB_DIR)/spice/Makefile: $(NETLIST) $(GEN)
+$(TB_STAMP): $(NETLIST) $(GEN)
 	@$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) generate
 
-verilator: $(TB_DIR)/sv/Makefile ## Run every generated testbench with Verilator
+# Every run target goes through this: regenerate if nothing is there yet, if an input
+# moved on, or if MODULE=/CUSTOM= differ from the last generation.
+ensure-tb: $(TB_STAMP)
+	@if [ "$(GEN_SIG)" != "$$(cat $(TB_SIG) 2>/dev/null)" ]; then \
+		$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) generate; \
+	fi
+.PHONY: ensure-tb
+
+verilator: ensure-tb ## Run the generated SystemVerilog testbenches with Verilator
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv verilator
 .PHONY: verilator
 
-icarus: $(TB_DIR)/sv/Makefile ## Run every generated testbench with Icarus Verilog
+icarus: ensure-tb ## Run the generated SystemVerilog testbenches with Icarus Verilog
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv icarus
 .PHONY: icarus
 
-sv: $(TB_DIR)/sv/Makefile ## Run the SystemVerilog testbenches (Verilator + Icarus)
+sv: ensure-tb ## Run the SystemVerilog testbenches (Verilator + Icarus)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv all
 .PHONY: sv
 
-spice: ## Run the transistor-level SPICE testbenches with ngspice
-	@[ -n "$(CUSTOM)$(MODULE)" ] || [ -f $(TB_DIR)/spice/Makefile ] || \
-		$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) generate
-	@[ -z "$(CUSTOM)$(MODULE)" ] || $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) generate
+spice: ensure-tb ## Run the transistor-level SPICE testbenches with ngspice
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice spice
 .PHONY: spice
 
 all: sv spice ## Run every testbench: SystemVerilog and SPICE
 .PHONY: all
 
-wave-sv: $(TB_DIR)/sv/Makefile ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
+wave-sv: ensure-tb ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-sv
 
-wave-spice: ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<module>)
-	@[ -f $(TB_DIR)/spice/Makefile ] || $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) generate
+wave-spice: ensure-tb ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<module>)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-spice
 

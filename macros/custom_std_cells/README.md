@@ -40,7 +40,8 @@ all live under `/foss/pdks`, which the host cannot see.
 ./run.sh "make -C macros/custom_std_cells help"
 ```
 
-`sv`, `spice` and `all` regenerate `tb/` automatically if `aion_cells.v` or the generator is newer.
+Every run target regenerates `tb/` first if it is missing, if `aion_cells.v` or the generator is
+newer, or if `MODULE=`/`CUSTOM=` differ from the last generation.
 
 | Target | What it does |
 | --- | --- |
@@ -87,16 +88,21 @@ The whole SPICE suite (16 modules, 1384 vectors, real transistors) takes about 1
 
 ### Working on one module
 
-Both `MODULE=` and `CUSTOM=` force a regeneration, and `MODULE=` makes the generator emit **only**
-those modules — SV and SPICE alike — and remove testbenches left over from a previous run, so the
-tree always shows exactly what was last generated:
+`MODULE=` makes the generator emit **only** those modules — SV and SPICE alike — and delete
+testbenches left over from a previous run, so the tree always shows exactly what was last
+generated:
 
 ```bash
+./run.sh "make -C macros/custom_std_cells sv    MODULE=AION_nand2_11"
 ./run.sh "make -C macros/custom_std_cells spice MODULE=AION_nand2_11"
-./run.sh "make -C macros/custom_std_cells all   MODULE=AION_nand2_11 MODULE=AION_a22oi_inv_10"
+./run.sh "make -C macros/custom_std_cells all   MODULE='AION_nand2_11 AION_a22oi_inv_10'"
 ```
 
-Run `make generate` with no `MODULE=` to get the full set back.
+This works on **every** run target, not just `generate`. `MODULE=` and `CUSTOM=` change *which*
+testbenches are emitted, which no file timestamp can express, so the Makefile records them in
+`tb/.gen_sig` and regenerates whenever they differ from the last run. That means dropping them
+again restores the full set automatically — plain `make sv` after `make sv MODULE=X` regenerates
+all 16 — while repeating the same command does not regenerate anything.
 
 ### Checking a custom implementation
 
