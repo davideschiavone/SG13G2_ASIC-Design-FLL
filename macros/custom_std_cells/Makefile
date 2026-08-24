@@ -172,6 +172,16 @@ JOBS      ?= 8
 VERIFY    ?= 1
 KEEP      ?= 0
 
+# Optional: drive the pin under test with a real cell instead of an ideal ramp, the way
+# vendor flows do (IHP's release notes say their cells were characterized with a "'buf_1'
+# active driver setting for all input pins"). The ramp into the driver is calibrated per
+# edge so that the slew arriving at the pin matches the grid index.
+#   usage: make lib DRIVER=sg13g2_buf_1
+# Note this does NOT reproduce the PDK's own tables better -- see the README.
+DRIVER     ?=
+DRIVER_IN  ?= A
+DRIVER_OUT ?= X
+
 LIB_FLAGS := --cell $(LIB_CELL) --verilog $(NETLIST) --lib $(LIB) \
              $(addprefix --cell-spice ,$(CELL_SP)) \
              --model-lib $(MODEL_LIB) \
@@ -180,6 +190,7 @@ LIB_FLAGS := --cell $(LIB_CELL) --verilog $(NETLIST) --lib $(LIB) \
              --slews "$(SLEWS)" --loads "$(LOADS)" \
              --lib-name $(LIB_NAME) --jobs $(JOBS) \
              $(if $(AREA),--area $(AREA),) \
+             $(if $(DRIVER),--driver-cell $(DRIVER) --driver-input $(DRIVER_IN) --driver-output $(DRIVER_OUT),) \
              $(if $(filter 0,$(VERIFY)),--no-verify,) \
              $(if $(filter 1,$(KEEP)),--keep-decks,) \
              -o $(LIB_DIR)
@@ -199,6 +210,7 @@ lib-selfcheck: ## Characterize a PDK cell and diff the result against the PDK's 
 		--corner typ:mos_tt:1.20:25 --template $(LIB_TMPL) \
 		--slews "$(SLEWS)" --loads "$(LOADS)" \
 		--lib-name selfcheck --jobs $(JOBS) --compare-lib $(LIB) \
+		$(if $(DRIVER),--driver-cell $(DRIVER) --driver-input $(DRIVER_IN) --driver-output $(DRIVER_OUT),) \
 		$(if $(filter 1,$(KEEP)),--keep-decks,) \
 		-o $(SELFCHECK_DIR)
 	@echo

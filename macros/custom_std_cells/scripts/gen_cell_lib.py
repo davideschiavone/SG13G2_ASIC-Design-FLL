@@ -77,6 +77,16 @@ Method
 supply source, and a single ``.op``. Output nodes thresholded at VDD/2 give the truth
 table; each supply current gives that state's leakage.
 
+*Stimulus* -- an ideal linear ramp by default. With ``--driver-cell`` the pin is instead
+driven by a real cell through a 0 V ammeter (so the input-port energy is still measured at
+the cell's own pin), and the ramp into that driver is calibrated by bracketed
+interpolation until the slew arriving at the pin matches the index. The samples of that
+curve are shared across the whole grid, so after the first row a new target usually costs
+one or two extra simulations. A driver also has a floor -- the fastest slew it can put on
+this pin however hard it is driven -- which is measured once and reported per grid row it
+affects (``--driver-underrun``). Because a driver's pull-up and pull-down are not equally
+strong, each input edge gets its own calibration and its own deck.
+
 *Timing and internal power* -- for every (input pin, output pin) pair the truth table
 shows a dependency for, the side-input states that sensitize it are collected and split by
 sense. Per (arc, sense, side state, slew) one deck is written holding a replica per output
@@ -136,10 +146,20 @@ an ideal linear ramp. Both differences were measured on ``sg13g2_nand2_1``:
   grid points of 11%, 7-10% and 17-20%. The shipped schematic netlist is pessimistic --
   it gives every device a full-size drain *and* source -- and full Magic extraction
   overshoots; the reference sits between the two, which is where a QRC extraction would.
-* **stimulus.** Driving pin A through a real ``sg13g2_buf_1`` instead of a ramp moves the
-  delay at the slow end of the grid from +11% to about +1%, and the fast end from -3% to
-  +8%. An active driver is the more faithful stimulus, and ``--input-ramp`` does not do it
-  -- it only changes the ramp's slope, not its shape.
+* **stimulus.** ``--driver-cell`` implements the second half: the pin under test is driven
+  by a real cell, with the ramp into *that* calibrated per edge until the slew arriving at
+  the pin matches the grid index. Measured on ``sg13g2_nand2_1`` with ``sg13g2_buf_1``, it
+  reproduces IHP's tables **worse**, not better: mean delay deviation goes from 3.6-4.8% to
+  21-25%, because the delivered waveform is not a ramp. To put a 2.5 ns 20-80 slew on the
+  pin, a buffer has to be driven so slowly that its output becomes an S-curve which is far
+  steeper than a linear ramp around the 50% crossing -- and the cell responds to the
+  crossing, not to the 20-80 time. Delays come out roughly half of the ideal-ramp ones at
+  the slow end of the grid. The 20-80 slew simply does not describe a real driver's
+  waveform, which is the whole reason CCS and ECSM exist. IHP's tables sit close to the
+  ideal-ramp numbers, so whatever their "active driver setting" does, the waveform it puts
+  on the pin behaves much more like a ramp than like a raw buffer output. The ideal ramp
+  therefore stays the default here, and ``--driver-cell`` is offered for flows that want a
+  real driver in the loop rather than as an accuracy improvement.
 
 Internal power is an estimate, and is reported as such. The total switching energy per
 cycle comes out around 1.4-1.5x IHP's, and that ratio survives *both* corrections above:
@@ -214,6 +234,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -504,6 +525,38 @@ class CharCell:
 
 
 @dataclass
+class Driver:
+    """A real cell used as the stimulus for the pin under test (``--driver-cell``).
+
+    Nothing about it is built in: the cell name, which of its pins is the input and which
+    the output, and where its supplies go all come from the command line, because a SPICE
+    ``.subckt`` says none of it.
+    """
+
+    cell: str
+    in_pin: str
+    out_pin: str
+    power: str
+    ground: str
+    ports: list[str]
+
+    def instance(self, tag: str, out_node: str, in_node: str, sup: str, gnd: str) -> str:
+        conns = {
+            self.out_pin: out_node, self.in_pin: in_node, self.power: sup, self.ground: gnd
+        }
+        pins = []
+        for p in self.ports:
+            key = next((k for k in conns if k.upper() == p.upper()), None)
+            if key is None:
+                raise CharError(
+                    f"driver cell '{self.cell}': pin '{p}' is not named by --driver-input, "
+                    "--driver-output, --driver-power or --driver-ground"
+                )
+            pins.append(conns[key])
+        return f"Xdrv{tag} " + " ".join(pins) + f" {self.cell}"
+
+
+@dataclass
 class Ctx:
     """Everything a deck needs that is not the cell itself."""
 
@@ -515,6 +568,7 @@ class Ctx:
     settle: float
     corner: Corner
     input_ramp: str = "measured"
+    driver: Driver | None = None
 
     @property
     def vth_in(self) -> float:
@@ -636,33 +690,57 @@ def emit_arc_deck(
     slew: float,
     loads: list[float],
     other_load: float,
+    drive_ramp: float | None = None,
 ) -> tuple[str, dict]:
     """One timing/power arc at one input slew, with a replica per output load.
 
     One pulse on `pin` gives both output edges. Every replica has its own supply source,
     its own copies of *all* input sources, and its load behind a 0 V ammeter, so each
     port's power can be integrated per replica.
+
+    With ``--driver-cell``, `drive_ramp` is the ramp into the *driver*, calibrated so that
+    the waveform arriving at `pin` has the wanted slew; the pin is then fed through the
+    driver and a 0 V ammeter, so the input-port energy is still measured at the cell's own
+    pin. Without it the pin is driven by an ideal ramp of ``ctx.ramp_of(slew)``.
     """
     ramp = ctx.ramp_of(slew)
-    hold = ctx.hold_of(ramp, max(loads))
-    t0 = max(ramp, 1e-10)
-    t1 = t0 + ramp + hold
-    t2 = t1 + ramp + hold
+    src_ramp = ramp if drive_ramp is None else drive_ramp
+    hold = ctx.hold_of(max(ramp, src_ramp), max(loads))
+    t0 = max(ramp, src_ramp, 1e-10)
+    t1 = t0 + src_ramp + hold
+    t2 = t1 + src_ramp + hold
     tstop = t2 + hold
-    tmax = ctx.tmax_of(ramp, tstop)
+    tmax = ctx.tmax_of(min(ramp, src_ramp), tstop)
     sidetxt = ", ".join(f"{k}={v}" for k, v in sorted(side.items())) or "none"
 
     L = deck_header(
-        f"{cell.name}: arc {pin} -> {out} at slew {_n(slew)} s, side inputs {{{sidetxt}}}", ctx
+        f"{cell.name}: arc {pin} -> {out} at slew {_n(slew)} s, side inputs {{{sidetxt}}}"
+        + (f", driven by {ctx.driver.cell}" if ctx.driver else ""),
+        ctx,
     )
     points = []
     for k, cl in enumerate(loads):
         conns = {cell.power: f"sup_{k}", cell.ground: "0", pin: f"sw_{k}"}
         L.append(f"* ---- replica {k}: load {_n(cl)} F ----")
-        L.append(
-            f"Vsw_{k} sw_{k} 0 PWL(0 0 {_n(t0)} 0 {_n(t0 + ramp)} {_n(ctx.vdd)} "
-            f"{_n(t1)} {_n(ctx.vdd)} {_n(t1 + ramp)} 0)"
+        pulse = (
+            f"PWL(0 0 {_n(t0)} 0 {_n(t0 + src_ramp)} {_n(ctx.vdd)} "
+            f"{_n(t1)} {_n(ctx.vdd)} {_n(t1 + src_ramp)} 0)"
         )
+        if ctx.driver is None:
+            L.append(f"Vsw_{k} sw_{k} 0 {pulse}")
+            # An ideal source reads negative current when it supplies, hence the sign.
+            in_term = f"-v(sw_{k})*i(vsw_{k})"
+        else:
+            # The driver gets its own supply so the DUT's supply current stays clean, and
+            # its output reaches the pin through a 0 V ammeter so the energy crossing the
+            # cell's own pin is still what gets measured.
+            L.append(f"Vsrc_{k} src_{k} 0 {pulse}")
+            L.append(f"Vdsup_{k} dsup_{k} 0 {_n(ctx.vdd)}")
+            L.append(ctx.driver.instance(str(k), f"dsw_{k}", f"src_{k}", f"dsup_{k}", "0"))
+            L.append(f"Vg_{k} dsw_{k} sw_{k} 0")
+            # This ammeter's + terminal faces the driver, so current into the cell is
+            # positive -- the opposite sign convention to the source above.
+            in_term = f"v(sw_{k})*i(vg_{k})"
         for j, (sig, val) in enumerate(sorted(side.items())):
             node = f"s_{k}_{j}"
             conns[sig] = node
@@ -677,11 +755,10 @@ def emit_arc_deck(
             if o != out:
                 L.append(f"Coo_{k}_{o} oo_{k}_{o} 0 {_n(other_load)}")
         # Port powers, signed so that positive means "into the cell".
-        in_terms = [f"v(sw_{k})*i(vsw_{k})"] + [
-            f"v(s_{k}_{j})*i(vs_{k}_{j})" for j in range(len(side))
-        ]
+        side_terms = [f"v(s_{k}_{j})*i(vs_{k}_{j})" for j in range(len(side))]
+        in_expr = in_term + ("".join(f" - {t}" for t in side_terms))
         L.append(f"Bps_{k} ps_{k} 0 V = -{_n(ctx.vdd)}*i(vsup_{k})")
-        L.append(f"Bpi_{k} pi_{k} 0 V = -({' + '.join(in_terms)})")
+        L.append(f"Bpi_{k} pi_{k} 0 V = {in_expr}")
         L.append(f"Bpo_{k} po_{k} 0 V = v(o_{k})*i(vl_{k})")
         L.append("")
         points.append(
@@ -753,6 +830,152 @@ def emit_arc_deck(
         "window_b": t2 - t1,
         "points": points,
     }
+
+
+def emit_cal_deck(
+    cell: CharCell, ctx: Ctx, pin: str, side: dict[str, int], src_ramp: float, cload: float
+) -> tuple[str, dict]:
+    """One driver + one cell instance, to find out what slew reaches the cell's pin.
+
+    Used only to calibrate ``--driver-cell``: the answer depends on the cell's input
+    capacitance in this side-input state and on the Miller feedback from its output, so it
+    has to be measured on the real thing rather than computed.
+    """
+    assert ctx.driver is not None
+    hold = ctx.hold_of(src_ramp, cload)
+    t0 = max(src_ramp, 1e-10)
+    t1 = t0 + src_ramp + hold
+    t2 = t1 + src_ramp + hold
+    tstop = t2 + hold
+    tmax = ctx.tmax_of(src_ramp, tstop)
+    lo_v, hi_v = ctx.vdd * ctx.th.slew_lower, ctx.vdd * ctx.th.slew_upper
+
+    L = deck_header(f"{cell.name}: driver calibration for pin {pin}", ctx)
+    conns = {cell.power: "sup", cell.ground: "0", pin: "sw"}
+    L.append(
+        f"Vsrc src 0 PWL(0 0 {_n(t0)} 0 {_n(t0 + src_ramp)} {_n(ctx.vdd)} "
+        f"{_n(t1)} {_n(ctx.vdd)} {_n(t1 + src_ramp)} 0)"
+    )
+    L.append(f"Vdsup dsup 0 {_n(ctx.vdd)}")
+    L.append(ctx.driver.instance("0", "sw", "src", "dsup", "0"))
+    for j, (sig, val) in enumerate(sorted(side.items())):
+        conns[sig] = f"s_{j}"
+        L.append(f"Vs_{j} s_{j} 0 {_n(ctx.vdd) if val else '0'}")
+    for o in cell.outputs:
+        conns[o] = f"o_{o}"
+    L.append(f"Vsup sup 0 {_n(ctx.vdd)}")
+    L.append(cell.instance("0", conns))
+    for o in cell.outputs:
+        L.append(f"Co_{o} o_{o} 0 {_n(cload)}")
+    L.append("")
+    L.append(".save v(sw)")
+    L.append(f".tran {_n(tmax)} {_n(tstop)} 0 {_n(tmax)}")
+    L.append(f".meas tran sr TRIG v(sw) VAL={_n(lo_v)} RISE=1 TARG v(sw) VAL={_n(hi_v)} RISE=1")
+    L.append(f".meas tran sf TRIG v(sw) VAL={_n(hi_v)} FALL=1 TARG v(sw) VAL={_n(lo_v)} FALL=1")
+    L.append(".end")
+    return "\n".join(L) + "\n", {"kind": "cal", "pin": pin, "src_ramp": src_ramp}
+
+
+class DriverCal:
+    """Solves "which ramp into the driver puts `target` slew on the pin", with memory.
+
+    The map from the driver's input ramp to the slew arriving at the pin is one smooth
+    monotone curve per (cell, pin, side state, edge). Every sample of it is a simulation, so
+    they are kept and shared: the seven grid rows of one arc walk the same curve, and after
+    the first row a new target usually needs one or two more points. Samples are also what
+    makes the driver's *floor* -- the fastest slew it can deliver into this pin, however
+    hard it is driven -- a one-off measurement instead of a per-row one.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._samples: dict[tuple, list[tuple[float, float]]] = {}
+
+    def _add(self, key, ramp: float, slew: float) -> None:
+        with self._lock:
+            pts = self._samples.setdefault(key, [])
+            pts.append((ramp, slew))
+            pts.sort()
+
+    def _get(self, key) -> list[tuple[float, float]]:
+        with self._lock:
+            return list(self._samples.get(key, []))
+
+    def solve(self, args, ctx, cell, pin, side, target, edge, workdir, tag):
+        key = (cell.name, pin, tuple(sorted(side.items())), edge, ctx.corner.tag)
+        meas = "sr" if edge == "rise" else "sf"
+        cal_load = args.driver_cal_load * args.units_cap
+        evals = [0]
+
+        def slew_at(src_ramp: float) -> float:
+            for r, s in self._get(key):
+                if abs(r - src_ramp) <= 1e-18:
+                    return s
+            evals[0] += 1
+            text, _ = emit_cal_deck(cell, ctx, pin, side, src_ramp, cal_load)
+            deck = workdir / f"cal_{tag}_{evals[0]}.spice"
+            deck.write_text(text)
+            slew = need(run_deck(args.ngspice, deck, args.timeout), meas)
+            self._add(key, src_ramp, slew)
+            return slew
+
+        floor = slew_at(args.driver_min_ramp)
+        if floor >= target * (1 - args.driver_tol):
+            note = (
+                f"{cell.name} pin {pin} {edge} edge, target slew {target:.4g} s: the driver "
+                f"'{ctx.driver.cell}' cannot deliver less than {floor:.4g} s into this pin, so "
+                "that grid row was characterized at the floor"
+            )
+            if args.driver_underrun == "error":
+                raise CharError(
+                    note + ".\n  Use a stronger --driver-cell, drop the fastest --slews "
+                    "entries, or pass --driver-underrun note to characterize at the floor."
+                )
+            return args.driver_min_ramp, floor, note
+
+        # Bracket the target, extending the sampled range only if it does not already cover it.
+        pts = self._get(key)
+        hi = next((r for r, s in pts if s >= target), None)
+        if hi is None:
+            hi = max(ctx.ramp_of(target), max(r for r, _ in pts))
+            for _ in range(8):
+                if slew_at(hi) >= target:
+                    break
+                hi *= 2.0
+            else:
+                raise CharError(
+                    f"{cell.name} pin {pin}: a slew of {target:.4g} s never arrives at the pin, "
+                    f"even with a {hi:.4g} s ramp into '{ctx.driver.cell}'"
+                )
+
+        # Regula falsi on the samples: the curve is close to affine away from the floor, so
+        # interpolating between the two bracketing points converges in a couple of steps.
+        for it in range(args.driver_max_iter):
+            pts = self._get(key)
+            below = [(r, s) for r, s in pts if s <= target]
+            above = [(r, s) for r, s in pts if s > target]
+            best = min(pts, key=lambda p: abs(p[1] - target))
+            if abs(best[1] - target) <= args.driver_tol * target or not (below and above):
+                break
+            r0, s0 = max(below)
+            r1, s1 = min(above)
+            # Alternate interpolation with bisection: pure regula falsi keeps one end of the
+            # bracket fixed on a curved function and can crawl.
+            if it % 2 or s1 == s0:
+                nxt = 0.5 * (r0 + r1)
+            else:
+                nxt = r0 + (r1 - r0) * (target - s0) / (s1 - s0)
+                nxt = min(max(nxt, r0 + 0.05 * (r1 - r0)), r1 - 0.05 * (r1 - r0))
+            slew_at(nxt)
+
+        best = min(self._get(key), key=lambda p: abs(p[1] - target))
+        note = None
+        if abs(best[1] - target) > args.driver_tol * target:
+            note = (
+                f"{cell.name} pin {pin} {edge} edge: the slew at the pin settled at "
+                f"{best[1]:.4g} s against a target of {target:.4g} s"
+            )
+        return best[0], best[1], note
 
 
 def emit_cap_deck(
@@ -1061,9 +1284,14 @@ class ArcSpec:
     slew: float
     slew_index: int
     deck: Path
+    # With an active driver the two input edges cannot both hit the index with one ramp
+    # (a driver's pull-up and pull-down are not equally strong), so each edge gets its own
+    # calibrated deck and contributes only its own half: "a" = input rising, "b" = falling.
+    use_edge: str = "both"
 
 
 MAX_SETTLE_RETRIES = 4
+DRIVER_CAL = DriverCal()
 
 
 def _unsettled(run: Run, info: dict, ctx: Ctx) -> list[str]:
@@ -1088,16 +1316,27 @@ def run_arc(args, ctx: Ctx, cell: CharCell, spec: ArcSpec, loads: list[float], o
     ask the user to guess a multiplier for a weak one, the deck reports where its output
     actually was and the allowance is doubled until it is right.
     """
+    drive_ramp, achieved, cal_note = None, None, None
+    if ctx.driver is not None:
+        edge = "rise" if spec.use_edge == "a" else "fall"
+        drive_ramp, achieved, cal_note = DRIVER_CAL.solve(
+            args, ctx, cell, spec.pin, spec.side, spec.slew, edge,
+            spec.deck.parent, f"{spec.pin}_{spec.sense[0]}_{edge}",
+        )
+
     settle = ctx.settle
     for attempt in range(MAX_SETTLE_RETRIES):
         local = dataclasses.replace(ctx, settle=settle)
         text, info = emit_arc_deck(
-            cell, local, spec.pin, spec.output, spec.side, spec.edge_a, spec.slew, loads, other_load
+            cell, local, spec.pin, spec.output, spec.side, spec.edge_a, spec.slew, loads,
+            other_load, drive_ramp,
         )
         spec.deck.write_text(text)
         run = run_deck(args.ngspice, spec.deck, args.timeout)
         bad = _unsettled(run, info, local)
         if not bad:
+            info["achieved_slew"] = achieved
+            info["cal_note"] = cal_note
             return spec, info, run, settle
         settle *= 2
     raise CharError(
@@ -1122,6 +1361,7 @@ class ArcResult:
     when: str
     tables: dict[str, list[list[float]]]  # in SI units
     states: list[dict[str, int]] = field(default_factory=list)
+    achieved: dict[str, float] = field(default_factory=dict)  # driver mode: slew at the pin
 
 
 @dataclass
@@ -1193,17 +1433,22 @@ def characterize(
                 states, args.max_side_states,
                 f"{cell.name} arc {arc['pin']}->{arc['output']} ({sense}) side states", notes,
             )
+            # One deck per input edge when a driver has to be calibrated per edge, one deck
+            # for both when an ideal (symmetric) ramp is used.
+            edges = ["a", "b"] if ctx.driver is not None else ["both"]
             for si, st in enumerate(used):
                 for sl, slew in enumerate(slews):
-                    specs.append(
-                        ArcSpec(
-                            pin=arc["pin"], output=arc["output"], sense=sense, when=when,
-                            side=st, edge_a="rise" if sense == "positive_unate" else "fall",
-                            slew=slew, slew_index=sl,
-                            deck=workdir
-                            / f"arc_{cell.name}_{arc['pin']}_{arc['output']}_{sense[0]}{si}_s{sl}.spice",
+                    for e in edges:
+                        suffix = "" if e == "both" else f"_{e}"
+                        specs.append(
+                            ArcSpec(
+                                pin=arc["pin"], output=arc["output"], sense=sense, when=when,
+                                side=st, edge_a="rise" if sense == "positive_unate" else "fall",
+                                slew=slew, slew_index=sl, use_edge=e,
+                                deck=workdir / f"arc_{cell.name}_{arc['pin']}_{arc['output']}"
+                                f"_{sense[0]}{si}_s{sl}{suffix}.spice",
+                            )
                         )
-                    )
 
     # ---- input capacitance ----------------------------------------------------------
     cap_specs: list[tuple[str, list[dict[str, int]], float, float, Path]] = []
@@ -1236,12 +1481,16 @@ def characterize(
                 f"{spec.deck.name}: needed {used_settle / ctx.settle:g}x the default settling "
                 "allowance (the deck was re-run until its output had settled)"
             )
+        if info.get("cal_note") and info["cal_note"] not in notes:
+            notes.append(info["cal_note"])
         g = grouped.setdefault(
             (spec.pin, spec.output, spec.sense),
-            {"when": spec.when, "tables": {}, "states": [], "raw": []},
+            {"when": spec.when, "tables": {}, "states": [], "raw": [], "achieved": {}},
         )
         if spec.side not in g["states"]:
             g["states"].append(spec.side)
+        if info.get("achieved_slew") is not None:
+            g["achieved"][f"slew{spec.slew_index}_{spec.use_edge}"] = info["achieved_slew"]
         for p in info["points"]:
             k, cl = p["load_index"], p["load"]
             m = {q: need(run, n) for q, n in p["meas"].items()}
@@ -1250,11 +1499,13 @@ def characterize(
             e_a = m["esa"] + m["eia"] - m["eoa"] - 0.5 * cl * ctx.vdd**2
             e_b = m["esb"] + m["eib"] - m["eob"] - 0.5 * cl * ctx.vdd**2
             if info["edge_a_output"] == "rise":
-                vals = {"cell_rise": m["da"], "rise_transition": m["sa"], "rise_power": e_a,
-                        "cell_fall": m["db"], "fall_transition": m["sb"], "fall_power": e_b}
+                half_a = {"cell_rise": m["da"], "rise_transition": m["sa"], "rise_power": e_a}
+                half_b = {"cell_fall": m["db"], "fall_transition": m["sb"], "fall_power": e_b}
             else:
-                vals = {"cell_fall": m["da"], "fall_transition": m["sa"], "fall_power": e_a,
-                        "cell_rise": m["db"], "rise_transition": m["sb"], "rise_power": e_b}
+                half_a = {"cell_fall": m["da"], "fall_transition": m["sa"], "fall_power": e_a}
+                half_b = {"cell_rise": m["db"], "rise_transition": m["sb"], "rise_power": e_b}
+            # A deck calibrated for one input edge only says anything about that edge.
+            vals = {"a": half_a, "b": half_b, "both": {**half_a, **half_b}}[spec.use_edge]
             for q, v in vals.items():
                 t = g["tables"].setdefault(q, [[None] * len(loads) for _ in slews])
                 cur = t[spec.slew_index][k]
@@ -1269,7 +1520,9 @@ def characterize(
         for q, t in g["tables"].items():
             if any(None in row for row in t):
                 raise CharError(f"{cell.name}: incomplete {q} table for {pin}->{out} ({sense})")
-        results.append(ArcResult(pin, out, sense, g["when"], g["tables"], g["states"]))
+        results.append(
+            ArcResult(pin, out, sense, g["when"], g["tables"], g["states"], g["achieved"])
+        )
 
     # ---- reduce the capacitance decks -------------------------------------------------
     caps: dict[str, dict[str, float]] = {}
@@ -1627,6 +1880,15 @@ def emit_report(all_results: dict[str, list[CellResult]], corners: list[Corner],
         f"{len(args.load_list)} loads  |  corners: "
         + ", ".join(f"`{c.tag}`" for c in corners),
         "",
+        "Stimulus: "
+        + (
+            f"the pin under test is driven by a real `{args.driver_cell}`, with the ramp into "
+            f"it calibrated per edge so the slew arriving at the pin matches the grid index "
+            f"(tolerance {args.driver_tol:g})."
+            if args.driver_cell
+            else f"an ideal linear ramp (`--input-ramp {args.input_ramp}`)."
+        ),
+        "",
         "## Corners",
         "",
         "| corner | model section | VDD | T | functional check |",
@@ -1695,6 +1957,20 @@ def emit_report(all_results: dict[str, list[CellResult]], corners: list[Corner],
                     f"{c['rise'] / tmpl.units.cap:.5g} | {c['fall'] / tmpl.units.cap:.5g} | "
                     f"{lo:.5g} .. {hi:.5g} |"
                 )
+            L.append("")
+        achieved = [(k, v) for arc in res.arcs for k, v in arc.achieved.items()]
+        if achieved:
+            L.append("Slew actually delivered to the pin by the driver, per grid row:")
+            L.append("")
+            L.append("| slew index | target | delivered (min .. max over arcs and edges) |")
+            L.append("| --- | --- | --- |")
+            for i, s in enumerate(args.slew_list):
+                got = [v for k, v in achieved if k.startswith(f"slew{i}_")]
+                if got:
+                    L.append(
+                        f"| {i} | {s:g} | {min(got) / tmpl.units.time:.4g} .. "
+                        f"{max(got) / tmpl.units.time:.4g} |"
+                    )
             L.append("")
         notes = [n for r in all_results[first.name] if r.cell.name == cell.name for n in r.notes]
         if notes:
@@ -1795,6 +2071,48 @@ def resolve_cells(args) -> list[CharCell]:
     return cells
 
 
+def resolve_driver(args) -> Driver | None:
+    """Turn the --driver-* arguments into a Driver, checking them against the SPICE file."""
+    if not args.driver_cell:
+        for opt in ("driver_input", "driver_output"):
+            if getattr(args, opt):
+                raise CharError(f"--{opt.replace('_', '-')} was given without --driver-cell")
+        return None
+    if not (args.driver_input and args.driver_output):
+        raise CharError(
+            "--driver-cell needs --driver-input and --driver-output: a SPICE .subckt does not "
+            "say which of its pins is the input and which the output"
+        )
+    for f in args.driver_spice:
+        if not f.is_file():
+            raise CharError(f"--driver-spice file not found: {f}")
+    known = tb.parse_spice_subckts(
+        list(args.netlist) + list(args.cell_spice) + list(args.driver_spice)
+    )
+    if args.driver_cell not in known:
+        raise CharError(
+            f"no '.subckt {args.driver_cell}' in the SPICE files given; add the file that "
+            "defines it with --driver-spice (or --cell-spice)"
+        )
+    ports, _ = known[args.driver_cell]
+    power = args.driver_power or args.power
+    ground = args.driver_ground or args.ground
+    named = {args.driver_input, args.driver_output, power, ground}
+    unknown = [p for p in ports if p.upper() not in {n.upper() for n in named}]
+    if unknown:
+        raise CharError(
+            f"driver cell '{args.driver_cell}' has pin(s) {unknown} that none of "
+            "--driver-input/--driver-output/--driver-power/--driver-ground names; every port "
+            "of the driver must be connected"
+        )
+    for role, p in (("--driver-input", args.driver_input), ("--driver-output", args.driver_output)):
+        if p.upper() not in {q.upper() for q in ports}:
+            raise CharError(
+                f"{role} '{p}' is not a port of '.subckt {args.driver_cell} {' '.join(ports)}'"
+            )
+    return Driver(args.driver_cell, args.driver_input, args.driver_output, power, ground, ports)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Characterize a SPICE cell with ngspice and write a Liberty file.",
@@ -1859,6 +2177,32 @@ def build_parser() -> argparse.ArgumentParser:
                     help="load on the outputs that are not being measured (default: 0.001)")
     ap.add_argument("--settle", type=float, default=1.0, metavar="X",
                     help="multiplier on the settling allowance between edges (default: 1)")
+    ap.add_argument("--driver-cell", metavar="NAME",
+                    help="drive the pin under test with this cell instead of an ideal ramp, "
+                    "the way vendor libraries are usually characterized. Needs "
+                    "--driver-input/--driver-output; its .subckt must be in one of the SPICE "
+                    "files given (or --driver-spice)")
+    ap.add_argument("--driver-spice", type=Path, action="append", default=[], metavar="FILE",
+                    help="extra SPICE file holding the driver cell; repeat")
+    ap.add_argument("--driver-input", metavar="PIN", help="input pin of --driver-cell")
+    ap.add_argument("--driver-output", metavar="PIN", help="output pin of --driver-cell")
+    ap.add_argument("--driver-power", metavar="PIN",
+                    help="supply pin of --driver-cell (default: the same as --power)")
+    ap.add_argument("--driver-ground", metavar="PIN",
+                    help="ground pin of --driver-cell (default: the same as --ground)")
+    ap.add_argument("--driver-cal-load", type=float, default=0.001, metavar="C",
+                    help="output load used while calibrating the driver, in the template's "
+                    "capacitance unit (default: 0.001)")
+    ap.add_argument("--driver-tol", type=float, default=0.02, metavar="X",
+                    help="relative tolerance on the slew delivered to the pin (default: 0.02)")
+    ap.add_argument("--driver-max-iter", type=int, default=12, metavar="N",
+                    help="bisection steps per calibration (default: 12)")
+    ap.add_argument("--driver-min-ramp", type=float, default=1e-13, metavar="S",
+                    help="fastest ramp, in seconds, that may be fed to the driver; also what "
+                    "the driver's own slew floor is measured at (default: 1e-13)")
+    ap.add_argument("--driver-underrun", choices=("note", "error"), default="note",
+                    help="what to do at a grid point faster than the driver can deliver: "
+                    "characterize at the floor and say so in the report (default), or stop")
     ap.add_argument("--input-ramp", choices=("measured", "full"), default="measured",
                     help="what a slew index value means for the stimulus: 'measured' (default) "
                     "drives a ramp whose measured lower..upper transition equals the index, as "
@@ -1929,6 +2273,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.slew_list != sorted(args.slew_list) or args.load_list != sorted(args.load_list):
         raise CharError("--slews and --loads must be given in increasing order")
 
+    args.units_cap = tmpl.units.cap
+    driver = resolve_driver(args)
     corners = [Corner.parse(c) for c in (args.corner or DEFAULT_CORNERS)]
     args.lib_name = args.lib_name or args.netlist[0].stem
     outdir = args.outdir or args.netlist[0].parent / "lib"
@@ -1952,9 +2298,14 @@ def main(argv: list[str] | None = None) -> int:
         + [f"--model-lib {args.model_lib}"]
         + [f"--corner {c}" for c in (args.corner or DEFAULT_CORNERS)]
         + [f"--template {args.template}"]
+        + ([f"--driver-cell {args.driver_cell} --driver-input {args.driver_input} "
+            f"--driver-output {args.driver_output}"] if args.driver_cell else [])
     )
 
-    includes = [f".include {f.resolve()}" for f in dict.fromkeys(list(args.cell_spice) + list(args.netlist))]
+    includes = [
+        f".include {f.resolve()}"
+        for f in dict.fromkeys(list(args.cell_spice) + list(args.netlist) + list(args.driver_spice))
+    ]
     all_results: dict[str, list[CellResult]] = {}
     verdicts: dict[str, str] = {}
     written: list[Path] = []
@@ -1971,6 +2322,7 @@ def main(argv: list[str] | None = None) -> int:
             settle=args.settle,
             corner=corner,
             input_ramp=args.input_ramp,
+            driver=driver,
         )
         workdir = outdir / "decks" / corner.tag
         print(f"[{corner.tag}] characterizing {len(cells)} cell(s) ...", flush=True)
@@ -2003,6 +2355,10 @@ def main(argv: list[str] | None = None) -> int:
         "library": args.lib_name,
         "template": str(args.template),
         "grid": {"slews": args.slew_list, "loads": args.load_list},
+        "stimulus": (
+            {"driver_cell": driver.cell, "input": driver.in_pin, "output": driver.out_pin}
+            if driver else {"ideal_ramp": args.input_ramp}
+        ),
         "units": {k: getattr(tmpl.units, k) for k in ("time", "cap", "volt", "curr", "leak", "energy")},
         "corners": {
             c.name: {
@@ -2018,7 +2374,8 @@ def main(argv: list[str] | None = None) -> int:
                         "capacitance_f": r.caps,
                         "arcs": [
                             {"pin": a.pin, "output": a.output, "sense": a.sense, "when": a.when,
-                             "states": a.states, "tables_si": a.tables}
+                             "states": a.states, "tables_si": a.tables,
+                             "achieved_slew_s": a.achieved}
                             for a in r.arcs
                         ],
                         "notes": r.notes,

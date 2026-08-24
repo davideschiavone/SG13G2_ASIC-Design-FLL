@@ -515,9 +515,46 @@ ideal linear ramp. Both differences were measured on `sg13g2_nand2_1`:
 
 The shipped schematic netlist is pessimistic — it gives every device a full-size drain *and*
 source, where the real layout shares diffusions — and full Magic extraction overshoots. The
-reference sits between the two, which is where a QRC extraction belongs. Replacing the ramp with a
-real `sg13g2_buf_1` driver moves the slow end of the grid from +11% to about **+1%**, and the fast
-end from −3% to +8%.
+reference sits between the two, which is where a QRC extraction belongs.
+
+### The active driver, and why it is not the default
+
+`--driver-cell` implements the other half of IHP's setup: the pin under test is driven by a real
+cell, with the ramp into *that* calibrated per edge until the slew arriving at the pin matches the
+grid index (delivered within 1–2% of target across the grid, see `char_report.md`).
+
+Measured, it reproduces IHP's tables **worse**, not better:
+
+| stimulus | mean delay dev | worst |
+| --- | --- | --- |
+| ideal linear ramp (default) | 3.6 – 4.8% | 11% |
+| real `sg13g2_buf_1`, calibrated per edge | 21 – 25% | 50% |
+
+The reason is instructive. To put a 2.5 ns 20-80 slew on the pin, a buffer must be driven so
+slowly that its output is an S-curve — flat in the tails, **far steeper than a linear ramp around
+the 50% crossing**. The receiving cell responds to the crossing, not to the 20-80 time, so its
+delay comes out roughly *half* the ideal-ramp value at the slow end of the grid. A 20-80 number
+simply does not describe a real driver's waveform, which is the whole reason CCS and ECSM exist.
+
+Since IHP's tables sit close to the ideal-ramp numbers, whatever their "active driver setting"
+does, the waveform it puts on the pin behaves much more like a ramp than like a raw buffer output.
+So the ideal ramp stays the default, and `--driver-cell` is there for flows that want a real driver
+in the loop — not as an accuracy improvement.
+
+```bash
+./run.sh "make -C macros/custom_std_cells lib DRIVER=sg13g2_buf_1"    # DRIVER_IN/DRIVER_OUT to taste
+```
+
+It is also much slower — each grid row needs its driver calibrated, and each input edge needs its
+own deck because a driver's pull-up and pull-down are not equally strong. On `AION_nand2_11`
+(3 arcs, 5 sensitizing side states) one corner takes ~530 s against ~20 s with the ideal ramp.
+
+Everything about the driver is an argument — `--driver-cell/-input/-output/-power/-ground`,
+`--driver-cal-load`, `--driver-tol`, `--driver-max-iter`, `--driver-min-ramp`,
+`--driver-underrun` — so nothing about this PDK is baked into the script. A driver has a **floor**
+(the fastest slew it can deliver into a given pin); that is measured once per pin and edge, and any
+grid row below it is characterized at the floor and **said so** in `char_report.md`, or made fatal
+with `--driver-underrun error`.
 
 **Internal power is an estimate and is reported as one.** The total switching energy per cycle
 comes out around 1.4–1.5× IHP's, and that ratio **survives both corrections above**: the
