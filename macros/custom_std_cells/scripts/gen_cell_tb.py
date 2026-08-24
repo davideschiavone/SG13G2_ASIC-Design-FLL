@@ -1255,14 +1255,15 @@ prompt with the windows open — type `quit` to leave, and use the prompt for an
 (`plot v(...)`, `print`, `meas`), exactly as in any ngspice session.
 
 This needs both a display and an **interactive terminal**, so neither a headless `run.sh` call nor
-a host shell can drive it (the host has no PDK and no ngspice). Run it either from a terminal
-inside the noVNC desktop (http://localhost/?password=abc123), where this repo is under
-`/foss/designs`, or from the host with a tty into the container:
+a host shell can drive it (the host has no PDK and no ngspice). Use `run-tty.sh` from the repo
+root, which is `run.sh` plus a tty and `DISPLAY=:1`:
 
 ```bash
-docker exec -it "iic-osic-tools_xvnc_uid_$(id -u)" bash -lc \\
-  'cd /foss/designs/<repo> && make -C macros/custom_std_cells plot TB=@EXAMPLETB@'
+./run-tty.sh "make -C macros/custom_std_cells plot TB=@EXAMPLETB@"
 ```
+
+A terminal inside the noVNC desktop (http://localhost/?password=abc123) works too; this repo is
+under `/foss/designs` there.
 
 The script is plain ngspice, so it also works by hand from this directory:
 

@@ -44,6 +44,11 @@ Once the container is running:
   `./run.sh "make help"` or `./run.sh "make sim-rtl-cocotb CELL=fll_digital"`.
 - GUI tools (Xschem, KLayout, OpenROAD viewers) are viewed in a browser via noVNC at
   `http://localhost/?password=abc123`.
+- For the **interactive** tools — ngspice's plotter, GTKWave, Xschem — use `./run-tty.sh`
+  instead: same wrapper with a tty and `DISPLAY=:1`, so the program's prompt stays in your
+  terminal while its windows open on the noVNC desktop. `run.sh` has no tty and cannot
+  drive them, e.g.
+  `./run-tty.sh "make -C macros/custom_std_cells plot TB=tb_AION_nand2_11"`.
 
 > **Provenance & attribution.** This repository is built on JKU's open-source
 > **[ihp-sg13g2-ams-chip-template](https://github.com/iic-jku/ihp-sg13g2-ams-chip-template)**

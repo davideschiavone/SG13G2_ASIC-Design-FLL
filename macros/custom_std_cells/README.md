@@ -188,17 +188,16 @@ cd /foss/designs/SG13G2_ASIC-Design-FLL
 make -C macros/custom_std_cells plot TB=tb_AION_nand2_11
 ```
 
-**From your host terminal**, with a tty into the container. The plot windows appear on the noVNC
-desktop in your browser while the ngspice prompt stays in your terminal:
+**From your host terminal, with `./run-tty.sh`** — the same wrapper as `run.sh` but with a tty and
+`DISPLAY=:1`. The plot windows appear on the noVNC desktop in your browser while the ngspice prompt
+stays in your terminal:
 
 ```bash
-docker exec -it "iic-osic-tools_xvnc_uid_$(id -u)" bash -lc \
-  'cd /foss/designs/SG13G2_ASIC-Design-FLL && \
-   make -C macros/custom_std_cells plot TB=tb_AION_nand2_11'
+./run-tty.sh "make -C macros/custom_std_cells plot TB=tb_AION_nand2_11"
+./run-tty.sh "make -C macros/custom_std_cells wave-spice TB=tb_AION_nand2_11"
 ```
 
-`DISPLAY` defaults to `:1`, the noVNC display. Everything else in this README is headless and runs
-fine through `./run.sh`.
+Everything else in this README is headless and runs fine through `./run.sh`.
 
 To only produce the files, without opening anything — these are headless, so `./run.sh` is fine.
 **`VCD=1` is the same switch in both layers:**

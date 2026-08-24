@@ -136,8 +136,12 @@ is NOT fetched; run `make init-submodules` if/when logo or fill steps are needed
 
 Headless first. Author netlists/SPICE decks as text and simulate with `ngspice -b`;
 the human opens Xschem/KLayout in the browser to view or tweak. GUI Make targets
-(`librelane-openroad`, `librelane-klayout`, `sim-view-*`) launch on the noVNC display
-:1 and will block a headless `run.sh` call — let the human drive those.
+(`librelane-openroad`, `librelane-klayout`, `sim-view-*`, `macros/custom_std_cells`'s
+`plot`/`wave-*`) launch on the noVNC display :1 and will block a headless `run.sh`
+call — let the human drive those. For those there is **`./run-tty.sh`**, the same
+wrapper with `docker exec -it` and `DISPLAY=:1`, so the tool's prompt stays in the
+human's terminal while its windows open on noVNC. It needs a real tty, so you cannot
+run it either — hand the human the `./run-tty.sh "…"` command instead.
 
 Everything tool-related must target the **ihp-sg13g2** PDK, never sky130.
 
