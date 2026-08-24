@@ -99,9 +99,11 @@ it is already accounted for elsewhere as this cell's pin capacitance seen by its
 Charge-only variants of this formula are recorded in ``char_data.json`` as well, but are
 not used: on a real cell they come out negative for one of the two edges.
 
-*Input capacitance* -- charge drawn through the pin over a full settled-to-settled
-0 -> VDD -> 0 excursion, ``C = |Q| / VDD``, per side-input state, with the output loaded
-(so the Miller contribution is included).
+*Input capacitance* -- charge drawn through the pin, ``C = |Q| / VDD``, per side-input
+state, with the output loaded. The integration window is the input edge itself
+(``--cap-window``), which is the convention the IHP libraries were built with; integrating
+until the cell settles instead adds the Miller charge that arrives while the output is
+still moving, worth about +30% on these cells.
 
 
 How good are the numbers?  (measured, not claimed)
@@ -117,7 +119,7 @@ run this was written from (typ corner, both arcs):
     fall_transition         4.3 - 5.3%      17.3%
     rise_power             47   - 57%      160%
     fall_power             23   - 45%       96%
-    input capacitance     +30%  (3.75 fF vs 2.89 fF on pin A)
+    input capacitance      -6.5% (2.70 fF vs 2.89 fF on pin A)
     leakage, per state    -1% to -38% depending on the state
 
 Timing is good to a few percent, and the residual is a smooth function of the grid rather
@@ -152,10 +154,22 @@ this: lctime adds the full input-port energy and subtracts no load energy at all
 have... is it really power or energy?" and a warning for the negative energies that
 convention produces.
 
-Input capacitance reads high partly by choice -- ``--cap-combine max`` keeps the worst
-side-input state, the one where the output switches and Miller feedback is included;
-``--cap-combine mean`` lands closer to IHP's headline number, and the per-state spread is
-emitted as ``rise_capacitance_range`` either way.
+The same boundary was found, and closed, on the input capacitance. Integrating the pin
+charge until the cell has settled collects the Miller charge that keeps flowing after the
+input edge is over, while the output is still switching, and gives 3.75 fF on
+``sg13g2_inv_1``; integrating over the input transition only gives 2.99 fF, against IHP's
+2.87 fF. So the reference counts the pin charge over the input edge, and this tool now
+does too (``--cap-window ramp``, the default, with ``--cap-slew`` defaulting to the fastest
+grid point -- with a slow input the output finishes switching while the input is still
+ramping and the distinction disappears). That moved pin A of ``sg13g2_nand2_1`` from +30%
+to -6.5%. ``--cap-window settled`` gives the physically complete charge a driver has to
+supply, which is the more honest number in isolation but does not match how the libraries
+it will sit next to were built.
+
+That boundary is worth about 0.76 fF here, or 1.1 fJ at this supply -- which is the size of
+the internal-energy excess as well, and is why the two are described as one finding. It
+does not fix ``internal_power`` though: the leftover energy has to be attributed to one of
+the two edges, and no single window choice reproduces IHP's split.
 
 Anything that depends on a reference library can be re-measured for any cell with
 ``--compare-lib``; do not take the table above on trust when the cell or the PDK changes.
@@ -773,13 +787,23 @@ def emit_cap_deck(
         for o in cell.outputs:
             L.append(f"Co_{k}_{o} o_{k}_{o} 0 {_n(cload)}")
         L.append("")
-        entries.append({"state": st, "meas": {"qr": f"qr_{k}", "qf": f"qf_{k}"}})
+        entries.append(
+            {
+                "state": st,
+                "meas": {
+                    "qr": f"qr_{k}", "qf": f"qf_{k}",          # settled to settled
+                    "qrr": f"qrr_{k}", "qff": f"qff_{k}",      # over the input ramp only
+                },
+            }
+        )
     L.append(".save " + " ".join(f"i(vp_{k})" for k in range(len(states))))
     L.append(f".tran {_n(tmax)} {_n(tstop)} 0 {_n(tmax)}")
     L.append("")
     for k in range(len(states)):
         L.append(f".meas tran qr_{k} INTEG i(vp_{k}) FROM={_n(t0)} TO={_n(t1)}")
         L.append(f".meas tran qf_{k} INTEG i(vp_{k}) FROM={_n(t1)} TO={_n(t2)}")
+        L.append(f".meas tran qrr_{k} INTEG i(vp_{k}) FROM={_n(t0)} TO={_n(t0 + ramp)}")
+        L.append(f".meas tran qff_{k} INTEG i(vp_{k}) FROM={_n(t1)} TO={_n(t1 + ramp)}")
     L.append(".end")
     return "\n".join(L) + "\n", {
         "kind": "cap", "pin": pin, "slew": slew, "load": cload, "states": entries,
@@ -1184,7 +1208,10 @@ def characterize(
     # ---- input capacitance ----------------------------------------------------------
     cap_specs: list[tuple[str, list[dict[str, int]], float, float, Path]] = []
     if not args.no_cap:
-        cap_slew = slews[len(slews) // 2] if args.cap_slew is None else args.cap_slew * tmpl.units.time
+        # Fastest grid slew by default: with a slow input the output finishes switching while
+        # the input is still ramping, so the Miller charge lands inside the ramp window and
+        # --cap-window stops meaning anything. See the --cap-window help.
+        cap_slew = slews[0] if args.cap_slew is None else args.cap_slew * tmpl.units.time
         cap_load = args.cap_load * tmpl.units.cap
         for pin in cell.inputs:
             others = [s for s in cell.inputs if s != pin]
@@ -1246,9 +1273,10 @@ def characterize(
 
     # ---- reduce the capacitance decks -------------------------------------------------
     caps: dict[str, dict[str, float]] = {}
+    kr, kf = ("qrr", "qff") if args.cap_window == "ramp" else ("qr", "qf")
     for pin, info, run in cap_done:
-        rise = [abs(need(run, s["meas"]["qr"])) / ctx.vdd for s in info["states"]]
-        fall = [abs(need(run, s["meas"]["qf"])) / ctx.vdd for s in info["states"]]
+        rise = [abs(need(run, s["meas"][kr])) / ctx.vdd for s in info["states"]]
+        fall = [abs(need(run, s["meas"][kf])) / ctx.vdd for s in info["states"]]
         for i, (r, f) in enumerate(zip(rise, fall)):
             if abs(r - f) > 0.25 * max(r, f):
                 notes.append(
@@ -1817,9 +1845,16 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-cap-states", type=int, default=4, metavar="N",
                     help="cap on side states per capacitance measurement (default: 4)")
     ap.add_argument("--cap-slew", type=float, default=None, metavar="T",
-                    help="slew for the capacitance decks (default: middle of the grid)")
+                    help="slew for the capacitance decks (default: the fastest grid point, "
+                    "where --cap-window actually discriminates)")
     ap.add_argument("--cap-load", type=float, default=0.001, metavar="C",
                     help="output load during the capacitance decks (default: 0.001)")
+    ap.add_argument("--cap-window", choices=("ramp", "settled"), default="ramp",
+                    help="how much of the pin charge counts as pin capacitance: 'ramp' "
+                    "(default) integrates over the input transition only, which is what the "
+                    "IHP libraries do; 'settled' integrates to the next settled state and so "
+                    "also collects the Miller charge that flows while the output is still "
+                    "switching -- about 30%% more on sg13g2_inv_1")
     ap.add_argument("--other-load", type=float, default=0.001, metavar="C",
                     help="load on the outputs that are not being measured (default: 0.001)")
     ap.add_argument("--settle", type=float, default=1.0, metavar="X",

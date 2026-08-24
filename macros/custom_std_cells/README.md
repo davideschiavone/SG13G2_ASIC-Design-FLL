@@ -494,6 +494,7 @@ written from (typ corner, both arcs):
 | `rise_transition` | 5.4 – 5.5% | 26.2% |
 | `fall_transition` | 4.3 – 5.3% | 17.3% |
 | `rise_power` | 47 – 57% | 160% |
+| input capacitance | −6.5% (2.70 fF vs 2.89 fF) | — |
 | `fall_power` | 23 – 45% | 96% |
 
 Timing is good to a few percent. Where the rest comes from is **known, not guessed**: the PDK's
@@ -529,10 +530,30 @@ driver. Nobody agrees on this: lctime adds the full input-port energy and subtra
 at all, and its own source carries a *"TODO: what unit does rise_power have… is it really power or
 energy?"* next to a warning for the negative energies that convention produces.
 
-Input capacitance reads about 30% above IHP's headline number partly by choice — `--cap-combine
-max` keeps the worst side-input state, the one where the output switches and Miller feedback is
-included; `--cap-combine mean` lands closer, and the per-state spread is emitted as
-`rise_capacitance_range` either way.
+### The same boundary, found and closed on input capacitance
+
+Where the pin charge stops being counted turned out to be measurable. On `sg13g2_inv_1`:
+
+| integration window | Cin | vs IHP's 2.87 fF |
+| --- | --- | --- |
+| the input edge only | 2.99 fF | +4% |
+| until the cell has settled | 3.75 fF | **+31%** |
+
+The extra 0.76 fF is Miller charge that keeps flowing *after* the input edge is over, while the
+output is still switching. The reference counts only the input edge, so this tool now does too:
+`--cap-window ramp` (default), with `--cap-slew` defaulting to the fastest grid point — with a slow
+input the output finishes switching while the input is still ramping and the distinction
+disappears. That moved pin A of `sg13g2_nand2_1` from +30% to **−6.5%**. `--cap-window settled`
+gives the physically complete charge a driver must supply, which is the more honest number in
+isolation but does not match how the libraries it will sit beside were built.
+
+That same 0.76 fF is **1.1 fJ** at this supply — the size of the internal-energy excess. So one
+accounting boundary explains both. It does not *fix* `internal_power`, though: the leftover energy
+still has to be attributed to one edge or the other, and no single window choice reproduces IHP's
+split between them.
+
+`--cap-combine max` keeps the worst side-input state; `mean` averages, and the per-state spread is
+emitted as `rise_capacitance_range` either way.
 
 Don't take that table on trust when the cell or the PDK changes — re-measure it with
 `--compare-lib`.
