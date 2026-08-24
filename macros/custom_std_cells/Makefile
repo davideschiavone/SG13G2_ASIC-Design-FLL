@@ -93,6 +93,12 @@ ENSURE_SV    = $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) ensure-tb EMIT=sv
 ENSURE_SPICE = $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) ensure-tb EMIT=spice
 ENSURE_BOTH  = $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) ensure-tb EMIT=both
 
+# Opening one waveform should generate one testbench, so TB=tb_<module> implies
+# MODULE=<module> unless MODULE= was given explicitly.
+TB_MODULE      = $(if $(MODULE),$(MODULE),$(patsubst tb_%,%,$(TB)))
+ENSURE_SV_TB    = $(ENSURE_SV) $(if $(TB),MODULE=$(TB_MODULE),)
+ENSURE_SPICE_TB = $(ENSURE_SPICE) $(if $(TB),MODULE=$(TB_MODULE),)
+
 verilator: ## Run the generated SystemVerilog testbenches with Verilator
 	@$(ENSURE_SV)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv verilator
@@ -121,17 +127,17 @@ all: ## Run every testbench: SystemVerilog and SPICE
 
 
 plot: ## Open the analog waveforms in ngspice's own plotter (usage: make plot TB=tb_<module>)
-	@$(ENSURE_SPICE)
+	@$(ENSURE_SPICE_TB)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice plot $(if $(TB),TB=$(TB),)
 .PHONY: plot
 
 wave-sv: ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
-	@$(ENSURE_SV)
+	@$(ENSURE_SV_TB)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-sv
 
 wave-spice: ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<module>)
-	@$(ENSURE_SPICE)
+	@$(ENSURE_SPICE_TB)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-spice
 

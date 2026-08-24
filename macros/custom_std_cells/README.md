@@ -151,8 +151,9 @@ no conversion — the same idea as `make plot` in `mixed_signal/`:
 make -C macros/custom_std_cells plot TB=tb_AION_nand2_11
 ```
 
-It simulates **only that one deck** if its rawfile is missing — not the whole suite — then runs the
-generated `tb_<module>.plot.spice`, which loads
+`TB=tb_<module>` implies `MODULE=<module>`, so this generates and simulates **only that one
+module** — not the whole suite. Pass `MODULE=` explicitly to override. It then runs the generated
+`tb_<module>.plot.spice`, which loads
 `build/tb_<module>.raw` and opens one window per group: the input vector and the strobe, each
 output as gold vs reference (vs custom), and the mismatch flags. ngspice stays at its prompt with
 the windows open, so you can keep going by hand — `plot v(xref.w0)`, `print`, `meas` — and `quit`
