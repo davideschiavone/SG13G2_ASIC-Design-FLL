@@ -37,10 +37,17 @@ NETLIST  ?= $(MAKEFILE_DIR)aion_cells.v
 TB_DIR   ?= $(MAKEFILE_DIR)tb
 GEN      := $(MAKEFILE_DIR)scripts/gen_cell_tb.py
 
+# GTKWave cannot read an ngspice rawfile; this converts one to VCD.
+RAW2VCD  ?= $(MAKEFILE_DIR)../../mixed_signal/raw2vcd.py
+
+# Which testbench `make wave-sv` / `make wave-spice` opens.
+TB       ?=
+
 GEN_FLAGS := --lib $(LIB) \
              $(addprefix --cell-verilog ,$(CELL_V)) \
              $(addprefix --cell-spice ,$(CELL_SP)) \
              --model-lib $(MODEL_LIB) --model-section $(MODEL_SECTION) --vdd $(VDD) \
+             --raw2vcd $(RAW2VCD) \
              $(addprefix --custom-netlist ,$(CUSTOM)) \
              $(addprefix --module ,$(MODULE)) \
              -o $(TB_DIR)
@@ -82,6 +89,15 @@ spice: ## Run the transistor-level SPICE testbenches with ngspice
 
 all: sv spice ## Run every testbench: SystemVerilog and SPICE
 .PHONY: all
+
+wave-sv: $(TB_DIR)/sv/Makefile ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
+	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv wave $(if $(TB),TB=$(TB),)
+.PHONY: wave-sv
+
+wave-spice: ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<module>)
+	@[ -f $(TB_DIR)/spice/Makefile ] || $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) generate
+	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice wave $(if $(TB),TB=$(TB),)
+.PHONY: wave-spice
 
 clean: ## Delete the whole generated tb/ directory (testbenches and build products)
 	rm -rf $(TB_DIR)

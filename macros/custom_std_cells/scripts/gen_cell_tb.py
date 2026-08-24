@@ -891,6 +891,9 @@ def emit_spice_tb(
     add(f".tran {tstep} '{nvec}*{period}'")
     add("")
     add(".control")
+    add("* ASCII so a rawfile written with -r can be converted to VCD; costs nothing")
+    add("* when no -r is given, since then no rawfile is written at all.")
+    add("set filetype=ascii")
     add("run")
     add("let fail = 0")
     for a, b, label in pairs:
@@ -1042,6 +1045,15 @@ all: ## Run every testbench with both simulators
 \t@$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) icarus
 .PHONY: all
 
+DISPLAY ?= :1
+TB      ?= @EXAMPLETB@
+
+wave: ## Simulate with VCD and open one in GTKWave (usage: make wave TB=<tb_name>)
+\t@[ -f $(BUILD)/icarus/$(TB).vcd ] || \\
+\t\t$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) icarus VCD=1
+\tDISPLAY=$(DISPLAY) gtkwave $(BUILD)/icarus/$(TB).vcd
+.PHONY: wave
+
 clean: ## Remove simulator build products
 \trm -rf $(BUILD)
 .PHONY: clean
@@ -1084,11 +1096,16 @@ BUILD        := $(MAKEFILE_DIR)build
 NGSPICE       ?= ngspice
 NGSPICE_FLAGS ?= -b
 
+# Waveform viewing. GTKWave cannot read an ngspice rawfile, so RAW2VCD converts one
+# (the decks `set filetype=ascii`, which is what that converter expects).
+RAW2VCD ?= @RAW2VCD@
+DISPLAY ?= :1
+TB      ?= @EXAMPLETB@
+
 TBS := \\
 @TBLIST@
 
 # RAW=1 writes an ngspice ASCII rawfile per module into build/, for waveform viewing.
-# ../../../../mixed_signal/raw2vcd.py converts one to VCD for GTKWave.
 ifeq ($(RAW),1)
 NGSPICE_FLAGS += -r $(BUILD)/$$tb.raw
 endif
@@ -1115,7 +1132,26 @@ spice: ## Run every SPICE testbench with ngspice
 all: spice ## Alias for 'spice'
 .PHONY: all
 
-clean: ## Remove simulation logs and rawfiles
+raw: ## Re-run every testbench and keep an ngspice rawfile per module
+\t@$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) spice RAW=1
+.PHONY: raw
+
+vcd: ## Convert every rawfile in build/ to a VCD GTKWave can open
+\t@[ -n "$(RAW2VCD)" ] || { echo "set RAW2VCD=<path to raw2vcd.py>"; exit 1; }
+\t@ls $(BUILD)/*.raw >/dev/null 2>&1 || { echo "no rawfile: run 'make raw' first"; exit 1; }
+\t@for f in $(BUILD)/*.raw; do \\
+\t\tpython3 $(RAW2VCD) $$f $${f%.raw}.vcd && echo "$${f%.raw}.vcd"; \\
+\tdone
+.PHONY: vcd
+
+wave: ## Simulate with waveforms and open one in GTKWave (usage: make wave TB=<tb_name>)
+\t@[ -f $(BUILD)/$(TB).raw ] || $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) raw
+\t@[ -n "$(RAW2VCD)" ] || { echo "set RAW2VCD=<path to raw2vcd.py>"; exit 1; }
+\tpython3 $(RAW2VCD) $(BUILD)/$(TB).raw $(BUILD)/$(TB).vcd
+\tDISPLAY=$(DISPLAY) gtkwave $(BUILD)/$(TB).vcd
+.PHONY: wave
+
+clean: ## Remove simulation logs, rawfiles and VCDs
 \trm -rf $(BUILD)
 .PHONY: clean
 """
@@ -1163,24 +1199,45 @@ Per-deck logs land in `build/<tb>.run.log`.
 | `help` | list the targets (default target) |
 | `spice` | run every deck, report pass/fail, exit non-zero if any failed |
 | `all` | alias for `spice` |
+| `raw` | re-run keeping an ngspice rawfile per module |
+| `vcd` | convert every rawfile in `build/` to VCD |
+| `wave` | simulate, convert and open one in GTKWave (`TB=<tb_name>`) |
 | `clean` | remove `build/` |
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `NGSPICE` | `ngspice` | simulator binary |
 | `NGSPICE_FLAGS` | `-b` | extra flags |
-| `RAW` | unset | `RAW=1` writes `build/<tb>.raw` for waveform viewing |
+| `RAW` | unset | `RAW=1` writes `build/<tb>.raw` |
+| `RAW2VCD` | *(from `--raw2vcd`)* | rawfile-to-VCD converter |
+| `TB` | `@EXAMPLETB@` | which testbench `make wave` opens |
+| `DISPLAY` | `:1` | X display GTKWave opens on (the noVNC desktop) |
 
 ### Waveforms
 
+Off by default. One command does the lot — simulate, convert, open:
+
 ```bash
-./run.sh "make -C macros/custom_std_cells spice RAW=1"
+make wave TB=@EXAMPLETB@
 ```
 
-That leaves an ngspice rawfile per module in `build/`. The repo already has a converter for
-GTKWave — `mixed_signal/raw2vcd.py` — since GTKWave cannot read a rawfile directly. Only the
-checked nodes are saved (`.save` in each deck): the inputs, the strobe, each implementation's
-outputs, and the three gated error signals `c_gold_ref`, `c_gold_cus`, `c_ref_cus`.
+GTKWave is a GUI, so run that from the noVNC desktop (http://localhost/?password=abc123), not from
+a headless shell. To just produce the files:
+
+```bash
+make raw      # -> build/<tb>.raw   for every module
+make vcd      # -> build/<tb>.vcd   for every rawfile
+```
+
+GTKWave cannot read an ngspice rawfile, hence the conversion step; each deck does
+`set filetype=ascii` so the rawfile is in the text form the converter expects. Every node becomes
+a VCD `real`, which GTKWave draws as an analog trace — so you see the actual switching waveforms,
+not just 0/1.
+
+Only the checked nodes are saved (`.save` in each deck): the inputs, the strobe `clk`, each
+implementation's outputs (`<out>_ref`, `<out>_cus`, `g_<out>`), and the gated error signals
+`c_gold_ref`, `c_gold_cus`, `c_ref_cus` — those last ones are flat 0 on a passing run and pulse to
+1 in the strobe window of a failing vector.
 
 ## Supplying a custom implementation
 
@@ -1494,6 +1551,14 @@ def main(argv: list[str] | None = None) -> int:
         default="both",
         help="which testbenches to generate (default: both)",
     )
+    ap.add_argument(
+        "--raw2vcd",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="raw2vcd.py-style converter, baked into the SPICE Makefile's 'wave'/'vcd' targets; "
+        "GTKWave cannot read an ngspice rawfile directly",
+    )
     ap.add_argument("--vdd", default="1.2", metavar="V", help="supply voltage (default: 1.2)")
     ap.add_argument(
         "--period", default="1n", metavar="T", help="one input vector per period (default: 1n)"
@@ -1706,6 +1771,7 @@ def main(argv: list[str] | None = None) -> int:
                 cellsrc=" ".join(cell_abs),
                 stripblock=STRIP_BLOCK if args.strip_specify else NO_STRIP_BLOCK,
                 tblist=" \\\n".join(f"\ttb_{gm.module.name}" for gm in models),
+                exampletb=f"tb_{models[0].module.name}",
             )
         )
         written.append(mk)
@@ -1751,6 +1817,8 @@ def main(argv: list[str] | None = None) -> int:
                 script=script_name,
                 netlist=netlist.name,
                 tblist=" \\\n".join(f"\ttb_{gm.module.name}" for gm in models),
+                exampletb=f"tb_{models[0].module.name}",
+                raw2vcd=str(args.raw2vcd.resolve()) if args.raw2vcd else "",
             )
         )
         written.append(mk)
@@ -1775,6 +1843,7 @@ def main(argv: list[str] | None = None) -> int:
                 refprefix=REF_PREFIX,
                 gennote=gennote,
                 examplemod=example.module.name,
+                exampletb=f"tb_{example.module.name}",
                 examplevec=str(2 ** len(example.module.inputs)),
                 examplesubckt=f".subckt {example.module.name} "
                 + " ".join(spice_ports(example.module)),

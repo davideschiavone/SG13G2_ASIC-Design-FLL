@@ -51,6 +51,8 @@ all live under `/foss/pdks`, which the host cannot see.
 | `sv` | both digital simulators |
 | `spice` | run the transistor-level testbenches with ngspice |
 | `all` | `sv` then `spice` |
+| `wave-sv` | open a SystemVerilog waveform in GTKWave (`TB=tb_<module>`) |
+| `wave-spice` | open a SPICE waveform in GTKWave (`TB=tb_<module>`) |
 | `clean` | delete the whole generated `tb/` directory |
 | `clean-build` | delete only the build products, keep the generated testbenches |
 
@@ -133,17 +135,36 @@ message refers to.
 
 ### Waveforms
 
-Off by default in both layers.
+Off by default in both layers. The quickest route is one `wave` target per layer — it simulates
+with dumping on, converts if needed, and opens GTKWave:
 
 ```bash
-./run.sh "make -C macros/custom_std_cells verilator VCD=1"   # tb/sv/build/vlt/<tb>/<tb>.vcd
-./run.sh "make -C macros/custom_std_cells icarus    VCD=1"   # tb/sv/build/icarus/<tb>.vcd
-./run.sh "make -C macros/custom_std_cells spice     RAW=1"   # tb/spice/build/<tb>.raw
+./run.sh "make -C macros/custom_std_cells wave-sv    TB=tb_AION_nand2_11"
+./run.sh "make -C macros/custom_std_cells wave-spice TB=tb_AION_nand2_11"
 ```
 
-`gtkwave` and `surfer` are GUI tools: launch them from the noVNC desktop
-(http://localhost/?password=abc123). GTKWave cannot read an ngspice rawfile directly — the repo
-already has `mixed_signal/raw2vcd.py` for that conversion.
+**GTKWave is a GUI**, so run those from a terminal on the noVNC desktop
+(http://localhost/?password=abc123) — a headless `./run.sh` will just block. `DISPLAY` defaults
+to `:1`, the noVNC display.
+
+To only produce the files, without opening anything:
+
+```bash
+./run.sh "make -C macros/custom_std_cells verilator VCD=1"       # tb/sv/build/vlt/<tb>/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells icarus    VCD=1"       # tb/sv/build/icarus/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells/tb/spice  raw"         # tb/spice/build/<tb>.raw
+./run.sh "make -C macros/custom_std_cells/tb/spice  vcd"         # tb/spice/build/<tb>.vcd
+find macros/custom_std_cells/tb -name '*.vcd'
+```
+
+GTKWave cannot read an ngspice rawfile, so the SPICE decks `set filetype=ascii` and
+`mixed_signal/raw2vcd.py` converts it (`RAW2VCD` in the Makefile). Every node becomes a VCD `real`,
+which GTKWave draws as an analog trace — you see the real switching waveforms, not just 0/1.
+
+What to look at in a SPICE waveform: the inputs, the strobe `clk`, each implementation's outputs
+(`g_<out>` gold, `<out>_ref` reference, `<out>_cus` custom), and the gated error signals
+`c_gold_ref`, `c_gold_cus`, `c_ref_cus` — flat 0 on a passing run, pulsing to 1 in the strobe
+window of whichever vector failed. On the SV side `diff` and `correct` play the same role.
 
 ## `scripts/gen_cell_tb.py`
 
@@ -168,6 +189,7 @@ gen_cell_tb.py <netlist.v> --lib FILE [--cell-verilog FILE]... [--cell-spice FIL
 | `--model-lib FILE` | for `spice` | — | device model library |
 | `--model-section NAME` | no | `mos_tt` | section of `--model-lib` to select with `.lib`; empty for a plain `.include` |
 | `--custom-netlist FILE` | no | — | alternative implementation(s) to check for equivalence. Repeatable |
+| `--raw2vcd FILE` | no | — | rawfile-to-VCD converter, baked into the SPICE Makefile's `wave`/`vcd` targets |
 | `--module NAME` | no | *(all)* | generate only this module, SV and SPICE alike. Repeatable |
 | `--emit {sv,spice,both}` | no | `both` | which testbenches to generate |
 | `-o`, `--outdir DIR` | no | `<netlist dir>/tb` | output root; SV lands in `<DIR>/sv`, SPICE in `<DIR>/spice` |
