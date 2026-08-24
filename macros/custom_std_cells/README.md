@@ -10,22 +10,36 @@ so that claim can be verified mechanically after every regeneration of the netli
 * **`tb/spice/`** — ngspice, run against the real `sg13g2` transistors. Also the place where a
   **hand-written alternative implementation** can be proved equivalent.
 
+A second tool takes the same cells the other way: [`scripts/gen_cell_lib.py`](#liberty-characterization--scriptsgen_cell_libpy)
+**characterizes** a SPICE netlist with ngspice and writes a **Liberty `.lib` per corner**, so a
+custom cell can be handed to synthesis and STA. The two scripts stay separate — one verifies, the
+other characterizes — and meet only in that characterization runs the functional testbench once per
+corner before it trusts any number it measures.
+
 ```text
 📁 custom_std_cells/
 ├─ aion_cells.v            # the netlist under test (tracked)
-├─ Makefile                # pre-fills the ihp-sg13g2 paths, drives the generator (tracked)
+├─ Makefile                # pre-fills the ihp-sg13g2 paths, drives both generators (tracked)
 ├─ 📁 scripts/
-│  └─ gen_cell_tb.py       # the generator (tracked)
+│  ├─ gen_cell_tb.py       # testbench generator -- verification (tracked)
+│  ├─ gen_cell_lib.py      # characterizer -- Liberty generation (tracked)
+│  └─ 📁 lib_templates/
+│     └─ sg13g2.lib.tmpl   # the technology's library-level constants (tracked)
 ├─ 📁 custom_circuit_example/
 │  └─ aion_nand2_11_flat.spice   # worked CUSTOM= example: AION_nand2_11 as bare transistors
-└─ 📁 tb/                  # ENTIRELY GENERATED, git-ignored -- see .gitignore
-   ├─ gold_functions.md    # per module: Liberty functions, gold equations, truth tables
-   ├─ 📁 sv/               # tb_<module>.sv, Makefile, README.md, build/
-   └─ 📁 spice/            # tb_<module>.spice, reference_cells.spice, Makefile, README.md, build/
+├─ 📁 tb/                  # ENTIRELY GENERATED, git-ignored -- see .gitignore
+│  ├─ gold_functions.md    # per module: Liberty functions, gold equations, truth tables
+│  ├─ 📁 sv/               # tb_<module>.sv, Makefile, README.md, build/
+│  └─ 📁 spice/            # tb_<module>.spice, reference_cells.spice, Makefile, README.md, build/
+├─ 📁 lib/                 # ENTIRELY GENERATED, git-ignored
+│  ├─ <cell>_<corner>.lib  # one Liberty file per corner
+│  ├─ char_report.md       # function, arcs, unateness, capacitance, coverage notes
+│  └─ char_data.json       # every measurement in SI units, for diffing runs
+└─ 📁 lib-selfcheck/       # ENTIRELY GENERATED, git-ignored -- `make lib-selfcheck` output
 ```
 
-Nothing under `tb/` is tracked: it is fully reproducible from `aion_cells.v` plus the PDK, so it
-would only ever go stale in git when the netlist changes.
+Nothing under `tb/`, `lib/` or `lib-selfcheck/` is tracked: it is fully reproducible from
+`aion_cells.v` plus the PDK, so it would only ever go stale in git when the netlist changes.
 
 ## Usage
 
@@ -59,8 +73,12 @@ layer it runs** — `make spice` does not build `tb/sv/`, and `make verilator` d
 | `plot` | open the SPICE analog waveforms in ngspice's own plotter (`TB=tb_<module>`) |
 | `wave-sv` | open a SystemVerilog waveform in GTKWave (`TB=tb_<module>`) |
 | `wave-spice` | open a SPICE waveform in GTKWave (`TB=tb_<module>`) |
+| `lib` | characterize a cell into one Liberty file per corner — see [below](#liberty-characterization--scriptsgen_cell_libpy) |
+| `lib-selfcheck` | characterize a PDK cell and diff the result against the PDK's own `.lib` |
+| `lib-template` | print the Liberty template the libraries are built from |
 | `clean` | delete the whole generated `tb/` directory |
 | `clean-build` | delete only the build products, keep the generated testbenches |
+| `clean-lib` | delete `lib/` and `lib-selfcheck/` |
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -367,3 +385,183 @@ The gold model is **not** derived from the Verilog being tested — it comes fro
 between the two models, and the cell semantics come from an independent source.
 `tb/gold_functions.md` lists, per module, the Liberty function used for each instance, the emitted
 gold equations, the outputs flattened down to the primary inputs, and the truth tables.
+
+---
+
+# Liberty characterization — `scripts/gen_cell_lib.py`
+
+Verification says the netlist computes the right function. To let a **synthesis and STA flow**
+*use* a custom cell, it also needs a Liberty model of it: how fast it is, how much it loads its
+driver, what it burns. `gen_cell_lib.py` measures all of that with ngspice and writes one `.lib`
+per process corner.
+
+It is a separate tool from `gen_cell_tb.py` on purpose — one verifies, the other characterizes —
+and it is equally PDK-agnostic: every path is an argument, and everything technology-specific
+lives in a **Liberty template** rather than in the code.
+
+```bash
+# characterize the worked example at the three PDK corners
+./run.sh "make -C macros/custom_std_cells lib"
+
+# ...your own netlist, same variables as the testbench flow
+./run.sh "make -C macros/custom_std_cells lib CUSTOM=/foss/designs/.../my_cell.spice MODULE=my_cell"
+
+# how accurate is it? characterize a cell IHP already ships a .lib for, and diff
+./run.sh "make -C macros/custom_std_cells lib-selfcheck"
+```
+
+## What it produces
+
+For each cell, at each corner:
+
+| Liberty group | How it is obtained |
+| --- | --- |
+| `function` | **measured**: an `.op` per input vector gives the truth table, Quine-McCluskey minimizes it, and the resulting expression is re-evaluated against that table before it is written |
+| `cell_rise`, `cell_fall`, `rise_transition`, `fall_transition` | one NLDM table per timing arc over the slew × load grid |
+| `internal_power` (`rise_power`, `fall_power`) | port energy accounting over the same grid |
+| `leakage_power` per input state, `cell_leakage_power` | supply current at each `.op` |
+| `capacitance`, `rise_capacitance`, `fall_capacitance` (+ ranges) | charge through the pin over a settled 0 → VDD → 0 excursion |
+| `timing_sense`, `when` | from the measured truth table: which side-input states sensitize each arc, and with which polarity |
+
+Plus `char_report.md` (function, truth table, arcs, unateness, capacitance spread, coverage
+notes) and `char_data.json` (every measurement in SI units, so two runs can be diffed).
+
+Every emitted library is read back with **OpenSTA** before the tool reports success
+(`--no-check-sta` to skip).
+
+## The template contract
+
+`scripts/lib_templates/sg13g2.lib.tmpl` holds the library-level constants of the technology:
+units, delay/slew thresholds, wire-load models and the look-up-table templates. The script
+**reads them back out of the filled template** and uses them both to place its ngspice `.meas`
+thresholds and to scale its SI measurements — so changing `time_unit : "1ns"` to `"1ps"`, or the
+slew thresholds from 20/80 to 30/70, changes what is measured and what is written, with no code
+change. That is the whole point: retargeting to another technology is a new template, not a patch.
+
+A template must provide:
+
+| Requirement | Why |
+| --- | --- |
+| `@LIBRARY_NAME@`, `@CELLS@`, `@VOLTAGE@`, `@TEMPERATURE@`, `@INDEX_SLEW@`, `@INDEX_LOAD@` | the placeholders the generator fills; `@CELLS@` at library scope is where the `cell(){}` groups go |
+| `time_unit`, `capacitive_load_unit`, `voltage_unit`, `current_unit`, `leakage_power_unit` | the measurements are taken in SI units and scaled into these |
+| the eight `*_threshold_pct_*` attributes and `slew_derate_from_library` | the `.meas` statements are built from them |
+| `delay_model : table_lookup;` plus an `lu_table_template` and a `power_lut_template` carrying `@INDEX_SLEW@` / `@INDEX_LOAD@` | the table groups reference them by name (`--delay-template`, `--power-template`) |
+
+Optional placeholders (`@PROCESS@`, `@OPCOND_NAME@`, `@DATE@`, `@GENCMD@`, `@COMMENT@`,
+`@MAX_TRANSITION@`, `@MAX_CAPACITANCE@`, `@DEFAULT_INPUT_PIN_CAP@`) are filled when present.
+Everything else — copyright header, wire loads, `default_*` attributes — is copied through
+verbatim. A leftover `@TOKEN@` after filling is an error, so a typo cannot reach the output, and
+a `/* ... */` block marked `TEMPLATE-DOC` documents the template without ending up in the
+libraries built from it. `make lib-template` prints the built-in one as a starting point.
+
+## How the measurement works
+
+* **Function and leakage** — one deck with an instance per input vector, each on its own supply
+  source, and a single `.op`. An output that settles between 10% and 90% of VDD is refused rather
+  than rounded: a cell with internal state or a floating output cannot be given a Liberty function.
+* **Timing and internal power** — for each (input, output) pair that the truth table shows a
+  dependency for, the sensitizing side-input states are collected and split by sense. One deck per
+  (arc, sense, side state, slew) holds a replica per output load, and one input pulse gives *both*
+  output edges — so all four timing tables and both switching energies come out of one transient.
+  The input is a linear ramp of `slew / (slew_upper − slew_lower)`, so its *measured* slew is the
+  index value the table is built on.
+* **Internal energy** is port accounting over a settled-to-settled window, each port's power
+  integrated by a B-source:
+  `E = E_supply + E_input − E_load − ½·C·VDD²`.
+  The input-port term matters: the charge the switching pin's gate capacitance exchanges with the
+  cell's own VDD rail is comparable to the whole internal energy, and it is already accounted for
+  elsewhere as this cell's pin capacitance seen by its driver. The charge-only variants are
+  recorded in `char_data.json` but not used — on a real cell they come out negative for one edge.
+* **Settling** is checked, not assumed: every deck measures its own output at the end of each
+  window, and a deck that had not settled is re-run with the allowance doubled. A weak cell costs
+  a few extra simulations instead of producing a wrong table entry.
+* **Coverage caps are announced.** `--max-side-states` / `--max-cap-states` bound the work on wide
+  cells; whatever they drop is written into `char_report.md`, never silently skipped.
+
+## How accurate is it?
+
+`make lib-selfcheck` characterizes `sg13g2_nand2_1` out of the PDK's own SPICE and diffs the
+result against the Liberty IHP ships for it, over the whole 7×7 grid. From the run this was
+written from (typ corner, both arcs):
+
+| table | mean deviation | worst grid point |
+| --- | --- | --- |
+| `cell_rise` | 4.1 – 4.4% | 9.2% |
+| `cell_fall` | 3.6 – 4.8% | 11.3% |
+| `rise_transition` | 5.4 – 5.5% | 26.2% |
+| `fall_transition` | 4.3 – 5.3% | 17.3% |
+| `rise_power` | 47 – 57% | 160% |
+| `fall_power` | 23 – 45% | 96% |
+
+Timing is good to a few percent, and the residual is a smooth function of the grid rather than
+noise — it grows with input slew, which is what driving the input with a linear ramp instead of a
+real driver waveform would do.
+
+**Internal power is an estimate and is reported as one.** The *total* switching energy per cycle
+agrees to roughly 12%, but its split between the two edges does not match IHP's; their convention
+for which edge is charged with the gate-coupling charge could not be recovered from the shipped
+tables. Input capacitance reads about 30% above IHP's headline number partly by choice —
+`--cap-combine max` keeps the worst side-input state, the one where the output switches and Miller
+feedback is included; `--cap-combine mean` lands closer, and the per-state spread is emitted as
+`rise_capacitance_range` either way.
+
+Don't take that table on trust when the cell or the PDK changes — re-measure it with
+`--compare-lib`.
+
+## Limitations, stated rather than hidden
+
+* NLDM only — no CCS/ECSM.
+* Combinational cells only. A cell with internal state is detected (its truth table does not
+  resolve) and refused.
+* The stimulus is a linear ramp, not a real driver waveform.
+* `max_transition` / `max_capacitance` come from the grid, not from a slew-degradation criterion.
+* One load model per output; the outputs not being measured carry `--other-load`.
+
+## Command line
+
+```
+gen_cell_lib.py <netlist.spice>... --model-lib FILE
+                [--cell NAME]... [--inputs A,B --outputs Y | --verilog FILE | --lib FILE]
+                [--power PIN] [--ground PIN] [--cell-spice FILE]...
+                [--corner NAME:SECTION:VDD:TEMP]... [--template FILE]
+                [--slews LIST] [--loads LIST] [--lib-name NAME] [-o DIR]
+                [--area [CELL=]VALUE] [--footprint [CELL=]NAME]
+                [--combine max|min|first|mean] [--cap-combine ...]
+                [--max-side-states N] [--max-cap-states N] [--settle X]
+                [--no-power] [--no-cap] [--no-verify] [--compare-lib FILE]
+                [--check-sta|--no-check-sta] [--jobs N] [--keep-decks] [--print-template]
+```
+
+A SPICE `.subckt` does not say which pins are inputs and which are outputs, so one of
+`--inputs`/`--outputs`, `--verilog` (a module of the same name) or `--lib` (a cell of the same
+name) is required. `--verilog` additionally enables the **3-way** functional check —
+gold ↔ reference ↔ this netlist — at every corner.
+
+| Variable (Makefile) | Default | Meaning |
+| --- | --- | --- |
+| `LIB_SPICE` | `custom_circuit_example/aion_nand2_11_flat.spice`, or `CUSTOM` if set | netlist to characterize |
+| `LIB_CELL` | `AION_nand2_11`, or `MODULE` if set | which `.subckt` |
+| `CORNERS` | `typ:mos_tt:1.20:25 slow:mos_ss:1.08:125 fast:mos_ff:1.32:-40` | one `.lib` per entry |
+| `SLEWS` / `LOADS` | the PDK's own 7×7 index sets | the grid, in the template's units |
+| `LIB_TMPL` | `scripts/lib_templates/sg13g2.lib.tmpl` | the template |
+| `LIB_DIR` | `lib` | output directory |
+| `AREA` | *(empty)* | cell area for the Liberty `area` attribute |
+| `JOBS` | `8` | decks run in parallel |
+| `VERIFY` | `1` | `VERIFY=0` skips the per-corner functional check |
+| `KEEP` | `0` | `KEEP=1` keeps the generated decks and ngspice logs |
+
+## A note on running ngspice in parallel
+
+ngspice is built with OpenMP and its `num_threads` defaults to several threads per process. Run
+decks in parallel without changing that and the threads busy-wait against each other: measured
+here, one arc deck takes **0.2 s** on its own and about **a minute** when eight run at once —
+947 s of CPU for 1.6 s of work. One thread per process, many processes, is the right split.
+
+`OMP_NUM_THREADS` does *not* control it; ngspice has its own `num_threads` variable, read from
+`.spiceinit`. It reads exactly **one** such file — the first of the current directory,
+`$SPICE_USERINIT_DIR` and `$HOME` — so a local one *shadows* the others instead of adding to them.
+On this image `$SPICE_USERINIT_DIR` points at the PDK's `.spiceinit`, which is what loads the
+PSP103 Verilog-A models; a local file without those `osdi` lines makes every deck die with
+`Unknown model type psp103va`. `gen_cell_lib.py` therefore copies the file ngspice would have used
+into each deck directory and overrides only `num_threads` in the copy. Anything else in this repo
+that runs ngspice concurrently needs the same care.

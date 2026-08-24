@@ -841,6 +841,8 @@ def emit_spice_tb(
     for inc in ctx["includes"].splitlines():
         add(inc)
     add("")
+    if ctx.get("temp"):
+        add(f".temp {ctx['temp']}")
     add(f".param VDD={vdd}")
     add(".param VTH='VDD/2'")
     add("")
@@ -1639,6 +1641,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--vdd", default="1.2", metavar="V", help="supply voltage (default: 1.2)")
     ap.add_argument(
+        "--temp",
+        default=None,
+        metavar="C",
+        help="simulation temperature for the SPICE decks (default: ngspice's own, 27 C). "
+        "Set it together with --model-section/--vdd to check a specific corner",
+    )
+    ap.add_argument(
         "--period", default="1n", metavar="T", help="one input vector per period (default: 1n)"
     )
     ap.add_argument(
@@ -1782,6 +1791,7 @@ def main(argv: list[str] | None = None) -> int:
         + [f"--cell-spice {f}" for f in cell_sp]
         + ([f"--model-lib {args.model_lib}"] if args.model_lib else [])
         + ([f"--model-section {args.model_section}"] if args.model_section else [])
+        + ([f"--temp {args.temp}"] if args.temp else [])
         + [f"--custom-netlist {f}" for f in args.custom_netlist]
         + [f"--module {n}" for n in args.module]
         + ([] if args.emit == "both" else [f"--emit {args.emit}"])
@@ -1825,6 +1835,7 @@ def main(argv: list[str] | None = None) -> int:
             else f".include {Path(args.model_lib).resolve()}",
             "includes": "\n".join(includes),
             "vdd": args.vdd,
+            "temp": args.temp or "",
             "period": args.period,
             "tstep": args.tstep,
             "edge": f"0.02*{args.period}",

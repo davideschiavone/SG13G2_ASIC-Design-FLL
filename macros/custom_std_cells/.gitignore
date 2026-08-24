@@ -2,3 +2,9 @@
 # Liberty functions -- testbenches, Makefile, README and gold_functions.md alike.
 # Regenerate it with `make generate` instead of tracking it.
 tb/
+
+# lib/ and lib-selfcheck/ are generated in full by scripts/gen_cell_lib.py: the .lib files
+# per corner, the decks it ran, char_report.md and char_data.json. Reproducible from the
+# netlist plus the PDK, so regenerate with `make lib` rather than tracking them.
+lib/
+lib-selfcheck/

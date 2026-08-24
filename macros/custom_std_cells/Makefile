@@ -141,9 +141,81 @@ wave-spice: ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<m
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-spice
 
+# ---------------------------------------------------------------------------------------
+# Liberty characterization (scripts/gen_cell_lib.py)
+#
+# Independent of the tb/ flow above: gen_cell_tb.py verifies, gen_cell_lib.py characterizes.
+# The two meet only in that `lib` runs the exhaustive functional deck once per corner before
+# it trusts any timing number (turn that off with VERIFY=0).
+# ---------------------------------------------------------------------------------------
+
+GEN_LIB   := $(MAKEFILE_DIR)scripts/gen_cell_lib.py
+LIB_TMPL  ?= $(MAKEFILE_DIR)scripts/lib_templates/sg13g2.lib.tmpl
+LIB_DIR   ?= $(MAKEFILE_DIR)lib
+
+# What to characterize. Follows the same CUSTOM=/MODULE= convention as the tb targets, and
+# falls back to the worked example so a plain `make lib` does something useful.
+LIB_SPICE ?= $(if $(CUSTOM),$(CUSTOM),$(MAKEFILE_DIR)custom_circuit_example/aion_nand2_11_flat.spice)
+LIB_CELL  ?= $(if $(MODULE),$(MODULE),AION_nand2_11)
+LIB_NAME  ?= $(LIB_CELL)
+AREA      ?=
+
+# One .lib per corner. NAME:MODEL_SECTION:VDD:TEMP, matching the PDK's own library set.
+CORNERS   ?= typ:mos_tt:1.20:25 slow:mos_ss:1.08:125 fast:mos_ff:1.32:-40
+
+# The grid the tables are built on, in the template's units (ns and pF here). The defaults
+# are the PDK's own index sets, so the result can be read next to IHP's libraries.
+SLEWS     ?= 0.0186, 0.0966, 0.174, 0.3294, 0.6408, 1.263, 2.5074
+LOADS     ?= 0.001, 0.0234, 0.039, 0.0648, 0.108, 0.18, 0.3
+
+JOBS      ?= 8
+VERIFY    ?= 1
+KEEP      ?= 0
+
+LIB_FLAGS := --cell $(LIB_CELL) --verilog $(NETLIST) --lib $(LIB) \
+             $(addprefix --cell-spice ,$(CELL_SP)) \
+             --model-lib $(MODEL_LIB) \
+             $(addprefix --corner ,$(CORNERS)) \
+             --template $(LIB_TMPL) \
+             --slews "$(SLEWS)" --loads "$(LOADS)" \
+             --lib-name $(LIB_NAME) --jobs $(JOBS) \
+             $(if $(AREA),--area $(AREA),) \
+             $(if $(filter 0,$(VERIFY)),--no-verify,) \
+             $(if $(filter 1,$(KEEP)),--keep-decks,) \
+             -o $(LIB_DIR)
+
+lib: ## Characterize a cell into one .lib per corner (usage: make lib CUSTOM=<spice> MODULE=<cell>)
+	python3 $(GEN_LIB) $(LIB_SPICE) $(LIB_FLAGS)
+.PHONY: lib
+
+# Calibration: characterize a cell whose golden library ships with the PDK, then diff the
+# two table by table. The only honest way to say how good the numbers are.
+SELFCHECK_CELL ?= sg13g2_nand2_1
+SELFCHECK_DIR  ?= $(MAKEFILE_DIR)lib-selfcheck
+
+lib-selfcheck: ## Characterize a PDK cell and diff the result against the PDK's own .lib
+	python3 $(GEN_LIB) $(CELL_SP) \
+		--cell $(SELFCHECK_CELL) --lib $(LIB) --model-lib $(MODEL_LIB) \
+		--corner typ:mos_tt:1.20:25 --template $(LIB_TMPL) \
+		--slews "$(SLEWS)" --loads "$(LOADS)" \
+		--lib-name selfcheck --jobs $(JOBS) --compare-lib $(LIB) \
+		$(if $(filter 1,$(KEEP)),--keep-decks,) \
+		-o $(SELFCHECK_DIR)
+	@echo
+	@sed -n '/^## Comparison/,$$p' $(SELFCHECK_DIR)/char_report.md
+.PHONY: lib-selfcheck
+
+lib-template: ## Print the Liberty template used to build the libraries
+	@python3 $(GEN_LIB) --template $(LIB_TMPL) --print-template
+.PHONY: lib-template
+
 clean: ## Delete the whole generated tb/ directory (testbenches and build products)
 	rm -rf $(TB_DIR)
 .PHONY: clean
+
+clean-lib: ## Delete the generated Liberty directories
+	rm -rf $(LIB_DIR) $(SELFCHECK_DIR)
+.PHONY: clean-lib
 
 clean-build: ## Delete only the simulator build products, keep the generated testbenches
 	@[ -f $(TB_DIR)/sv/Makefile ] && $(MAKE) --no-print-directory -C $(TB_DIR)/sv clean || true
