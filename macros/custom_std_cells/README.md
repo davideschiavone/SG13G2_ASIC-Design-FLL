@@ -173,10 +173,32 @@ make -C macros/custom_std_cells wave-sv    TB=tb_AION_nand2_11
 make -C macros/custom_std_cells wave-spice TB=tb_AION_nand2_11
 ```
 
-**`plot`, `wave-sv` and `wave-spice` are GUI targets: run them from a terminal on the noVNC
-desktop** (http://localhost/?password=abc123), not through `./run.sh` — `plot` needs an
-interactive terminal as well as a display, so a headless call cannot drive it. `DISPLAY` defaults
-to `:1`, the noVNC display.
+### Running the GUI targets
+
+`plot`, `wave-sv` and `wave-spice` are the only targets that cannot go through `./run.sh`: it is
+`docker exec -i` with no tty, and `plot` needs an interactive terminal as well as a display.
+Running them on the **host** does not work either — the host has no `/foss/pdks` and no ngspice, so
+you get `Liberty file not found`. Two ways that do work:
+
+**From a terminal inside the noVNC desktop** (http://localhost/?password=abc123) — note the
+container path, this repo is under `/foss/designs`:
+
+```bash
+cd /foss/designs/SG13G2_ASIC-Design-FLL
+make -C macros/custom_std_cells plot TB=tb_AION_nand2_11
+```
+
+**From your host terminal**, with a tty into the container. The plot windows appear on the noVNC
+desktop in your browser while the ngspice prompt stays in your terminal:
+
+```bash
+docker exec -it "iic-osic-tools_xvnc_uid_$(id -u)" bash -lc \
+  'cd /foss/designs/SG13G2_ASIC-Design-FLL && \
+   make -C macros/custom_std_cells plot TB=tb_AION_nand2_11'
+```
+
+`DISPLAY` defaults to `:1`, the noVNC display. Everything else in this README is headless and runs
+fine through `./run.sh`.
 
 To only produce the files, without opening anything — these are headless, so `./run.sh` is fine.
 **`VCD=1` is the same switch in both layers:**

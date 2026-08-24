@@ -1254,10 +1254,17 @@ each output as gold vs the other implementations, and the mismatch flags. ngspic
 prompt with the windows open — type `quit` to leave, and use the prompt for anything else you want
 (`plot v(...)`, `print`, `meas`), exactly as in any ngspice session.
 
-**Run it from a terminal on the noVNC desktop** (http://localhost/?password=abc123). It needs both
-a display and an interactive terminal, so a headless `run.sh` call cannot drive it.
+This needs both a display and an **interactive terminal**, so neither a headless `run.sh` call nor
+a host shell can drive it (the host has no PDK and no ngspice). Run it either from a terminal
+inside the noVNC desktop (http://localhost/?password=abc123), where this repo is under
+`/foss/designs`, or from the host with a tty into the container:
 
-The script is plain ngspice, so it also works by hand:
+```bash
+docker exec -it "iic-osic-tools_xvnc_uid_$(id -u)" bash -lc \\
+  'cd /foss/designs/<repo> && make -C macros/custom_std_cells plot TB=@EXAMPLETB@'
+```
+
+The script is plain ngspice, so it also works by hand from this directory:
 
 ```bash
 DISPLAY=:1 ngspice @EXAMPLETB@.plot.spice
@@ -1651,13 +1658,27 @@ def main(argv: list[str] | None = None) -> int:
     do_sv = args.emit in ("sv", "both")
     do_spice = args.emit in ("spice", "both")
 
+    def need(path: Path, what: str) -> None:
+        if path.is_file():
+            return
+        hint = ""
+        pdk_root = Path(os.environ.get("PDK_ROOT", "/foss/pdks"))
+        if not pdk_root.is_dir() and str(path).startswith(str(pdk_root)):
+            hint = (
+                f"\n  {pdk_root} does not exist here, so this looks like the HOST shell.\n"
+                "  The PDK only exists inside the EDA container -- run this through ./run.sh\n"
+                "  from the repo root, e.g.\n"
+                '    ./run.sh "make -C macros/custom_std_cells generate"\n'
+                "  or from a terminal inside the container (the noVNC desktop), where this repo\n"
+                "  is at /foss/designs/<repo>."
+            )
+        raise GenError(f"{what} not found: {path}{hint}")
+
     netlist: Path = args.netlist
-    if not netlist.is_file():
-        raise GenError(f"netlist not found: {netlist}")
+    need(netlist, "netlist")
 
     lib_path: Path = args.lib
-    if not lib_path.is_file():
-        raise GenError(f"Liberty file not found: {lib_path}")
+    need(lib_path, "Liberty file")
 
     cell_v: list[Path] = list(args.cell_verilog)
     if do_sv and not args.no_makefile and not cell_v:
@@ -1678,11 +1699,12 @@ def main(argv: list[str] | None = None) -> int:
             "--model-lib is required for --emit spice/both: ngspice needs the device models "
             "for the transistors in the standard cells. Or use --emit sv."
         )
-    for f in cell_v + cell_sp + list(args.custom_netlist) + (
-        [args.model_lib] if args.model_lib else []
-    ):
-        if not f.is_file():
-            raise GenError(f"file not found: {f}")
+    for f in cell_v + cell_sp:
+        need(f, "cell model")
+    for f in args.custom_netlist:
+        need(f, "custom netlist")
+    if args.model_lib:
+        need(args.model_lib, "device model library")
 
     outdir: Path = args.outdir or netlist.parent / "tb"
     sv_dir, spice_dir = outdir / "sv", outdir / "spice"
