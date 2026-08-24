@@ -86,23 +86,32 @@ The template ships two example macros under `macros/`; each is the pattern for o
 - `rtl/chip_top.sv` + `rtl/chip_core.sv` + `flow/librelane/` — the template's padframe
   top level (scaffold only; see divergence above).
 
-## Environment — DO NOT reinstall or recreate any of this
+## Environment — check before assuming it's running
 - You (Claude Code) run on the HOST (Ubuntu 24.04). Docker is installed and working.
-- The EDA toolchain is an ALREADY-RUNNING container:
-  - name:  iic-osic-tools_xvnc_uid_1000
-  - image: hpretl/iic-osic-tools:2026.05 (template requires 2026.05 or later)
-  - ships: Xschem, Magic, KLayout, ngspice, Yosys, OpenROAD, OpenSTA, Netgen,
-    LibreLane, cocotb, Verilator, iverilog, + the ihp-sg13g2 PDK.
+- The EDA toolchain runs in a container, image `hpretl/iic-osic-tools:2026.05` (or
+  later), named `iic-osic-tools_xvnc_uid_<hostuid>` — the uid suffix is
+  `$(id -u)` on the host, NOT necessarily 1000. Check first:
+  `docker ps -a --filter name=iic-osic-tools`.
+- **If it's not running**, bootstrap it from the HOST shell (not via `./run.sh` —
+  that talks to the container, which doesn't exist yet):
+  ```bash
+  make docker-install   # once: fetches the IIC-OSIC-TOOLS launcher to ~/tools
+  make docker-start     # pulls the image (2026.05+) and starts the container
+  ```
+  See `make help` for `docker-install` / `docker-start` / `docker-stop` /
+  `docker-status`. Don't `docker rm`/recreate a container that's already running and
+  has state in it — check status first.
+- Ships: Xschem, Magic, KLayout, ngspice, Yosys, OpenROAD, OpenSTA, Netgen,
+  LibreLane, cocotb, Verilator, iverilog, + the ihp-sg13g2 PDK.
 - GUI desktop is viewed in a browser via noVNC at
   http://localhost/?password=abc123 (VNC display :1). The human drives GUI tools there.
 
 ## Path mapping — the one place host and container meet
-host `~/eda/designs`  ==  container `/foss/designs`
-- This project: host `~/eda/designs/SG13G2_ASIC-Design-FLL`
-  == container `/foss/designs/SG13G2_ASIC-Design-FLL`
-- Anything OUTSIDE `~/eda/designs` on the host is INVISIBLE to the container tools.
-- Host user and container user are both uid 1000, so files created by container
-  tools come back owned by the host user — no chown needed.
+`docker-start` mounts the PARENT of this repo (host) to container `/foss/designs`,
+so this repo lands at container `/foss/designs/SG13G2_ASIC-Design-FLL` regardless of
+where it's cloned on the host. Anything outside that mounted parent dir is INVISIBLE
+to the container tools. Host and container run as the same uid (`$(id -u)`), so files
+created by container tools come back owned by the host user — no chown needed.
 
 ## How you work here
 **Edit files** with your normal file tools on the HOST path (this repo). Because the
@@ -111,7 +120,7 @@ folder is bind-mounted, edits are instantly visible inside the container. No doc
 **Run EDA tools** inside the container via the wrapper `./run.sh`, which is:
 ```bash
 #!/usr/bin/env bash
-exec docker exec -i iic-osic-tools_xvnc_uid_1000 \
+exec docker exec -i "iic-osic-tools_xvnc_uid_$(id -u)" \
   bash -lc "export PDK=ihp-sg13g2; cd /foss/designs/SG13G2_ASIC-Design-FLL && $*"
 ```
 The build flow is `make` (run `./run.sh "make help"` to list targets). Examples:
