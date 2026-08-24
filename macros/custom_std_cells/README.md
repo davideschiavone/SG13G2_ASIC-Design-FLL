@@ -410,6 +410,91 @@ lives in a **Liberty template** rather than in the code.
 ./run.sh "make -C macros/custom_std_cells lib-selfcheck"
 ```
 
+## Worked example: characterizing a PDK cell
+
+```bash
+./run.sh 'python3 macros/custom_std_cells/scripts/gen_cell_lib.py \
+  $PDK_ROOT/$PDK/libs.ref/sg13g2_stdcell/spice/sg13g2_stdcell.spice \
+  --cell sg13g2_nand2_1 \
+  --verilog $PDK_ROOT/$PDK/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v \
+  --model-lib $PDK_ROOT/$PDK/libs.tech/ngspice/models/cornerMOSlv.lib \
+  --lib-name nand2 --area 7.2576 --jobs 12 --keep-decks'
+```
+
+Three corners, ~18 s, into `./lib/`. Add `--lib .../sg13g2_stdcell_typ_1p20V_25C.lib` to also get
+the per-corner functional check, and `--compare-lib <same file>` to diff the result against IHP's
+own tables — that combination is `make lib-selfcheck`.
+
+### What it needs, and what each input buys
+
+Required: the **SPICE netlist** holding the `.subckt`, **`--model-lib`**, and some way to know
+**which pins are inputs and which are outputs** — a SPICE `.subckt` does not say. Three sources,
+in precedence order:
+
+| source | notes |
+| --- | --- |
+| `--inputs A,B --outputs Y` | explicit; the only option for a cell with no other view |
+| `--verilog FILE` | read from the module header and its `input`/`output` declarations. **Any** Verilog view works, behavioural included — the PDK's own `sg13g2_stdcell.v`, written with gate primitives, does. If the file is a *structural* netlist it additionally becomes the DUT for the functional check |
+| `--lib FILE` | Liberty declares `direction` per pin, so a library defining the cell answers it too |
+
+**`--lib` is an oracle, never a data source.** No timing, power or capacitance number is read from
+it. It supplies the `function` attribute that `gen_cell_tb.py` builds its gold model from, so the
+transistors get checked against an independent description of what they should compute, at every
+corner, before any measurement is believed. Drop it and the run still works — the function is
+measured either way — and both the console and `char_report.md` say the check was skipped.
+
+The proof that nothing is copied: for `sg13g2_nand2_1` this tool emits `function : "!A+!B"` where
+IHP's library says `"!(A*B)"`. Same function, independently derived. Diffing the emitted cell group
+of a run *with* `--lib` against one with only `--inputs/--outputs` gives zero differences.
+
+So the true minimum, for a cell nobody has a Liberty for yet:
+
+```bash
+gen_cell_lib.py my_cell.spice --cell my_cell --inputs A,B --outputs Y \
+    --model-lib .../cornerMOSlv.lib --no-verify
+```
+
+`--area` and `--footprint` are optional metadata: `area` defaults to 0 and only feeds area reports,
+and `cell_footprint` groups pin-compatible cells so synthesis may swap one for another
+(`in_place_swap_mode : match_footprint`) — meaningful for a *family* of drive strengths, pointless
+for a single cell.
+
+## Where the output goes
+
+`-o DIR`, or **`./lib` relative to where you run it** if you don't say. Never next to the netlist,
+which is frequently a read-only file inside a PDK install.
+
+```text
+lib/
+├─ <libname>_<corner>.lib   one Liberty file per corner
+├─ char_report.md           function, truth table, arcs, unateness, pin capacitance,
+│                           slews the driver delivered, coverage notes
+├─ char_data.json           every measurement in SI units, for diffing runs
+└─ decks/                   everything that was simulated (see below)
+```
+
+## Where the generated SPICE decks are
+
+Under `<outdir>/decks/`. They are **deleted on success unless `--keep-decks`**, and always kept
+when a run fails — which is when you want them.
+
+| deck | what it measures |
+| --- | --- |
+| `decks/<corner>/op_<cell>.spice` | an `.op` per input vector: the truth table and per-state leakage |
+| `decks/<corner>/arc_<cell>_<pin>_<out>_<sense><state>_s<slew>[_a\|_b].spice` | one timing/power arc at one slew, a replica per output load |
+| `decks/<corner>/cap_<cell>_<pin>.spice` | input pin capacitance, a replica per side-input state |
+| `decks/<corner>/cal_<pin>_<sense>_<edge>_<n>.spice` | `--driver-cell` calibration attempts |
+| `decks/verify/<corner>/spice/tb_<cell>.spice` | **the exhaustive functional testbench**, written by `gen_cell_tb.py` and run before anything is measured |
+| `decks/verify/<corner>/spice/tb_<cell>.plot.spice` | ready-made ngspice plot script for that testbench |
+| `decks/verify/<corner>/gold_functions.md` | the Liberty function used for each instance, the gold equations, and the truth table |
+| `decks/verify/<cell>_wrap.v` | the one-instance Verilog wrapper handed to `gen_cell_tb.py` when the cell has no structural view |
+
+Every deck has its ngspice log beside it as `<deck>.log`, starting with the command line that
+produced it. Each deck directory also gets a `.spiceinit` (see [the threading
+note](#a-note-on-running-ngspice-in-parallel)). They are all plain ngspice input — `ngspice -b
+<deck>.spice` in that directory reproduces exactly what the tool measured, which is the way to
+debug a suspicious number.
+
 ## What it produces
 
 For each cell, at each corner:

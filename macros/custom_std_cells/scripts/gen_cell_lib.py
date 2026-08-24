@@ -38,6 +38,81 @@ or directly::
         -o lib/
 
 
+What it needs, and what each input buys
+---------------------------------------
+Required: the SPICE netlist holding the ``.subckt`` (positional), ``--model-lib``, and some
+way to know **which pins are inputs and which are outputs** -- a SPICE ``.subckt`` does not
+say. That last one has three sources, in this order of precedence:
+
+===================  ===========================================================
+``--inputs``/        explicit, and the only option for a cell with no other view
+``--outputs``
+``--verilog FILE``   the directions are read out of the module header and its
+                     ``input``/``output`` declarations. **Any** Verilog view will
+                     do, behavioural included -- the PDK's own
+                     ``sg13g2_stdcell.v``, written with gate primitives, works.
+                     If the file happens to be a *structural* netlist, it also
+                     becomes the design under test for the functional check.
+``--lib FILE``       Liberty declares ``direction`` per pin, so a library that
+                     defines the cell answers the question too.
+===================  ===========================================================
+
+``--lib`` is an *oracle*, never a data source: no timing, power or capacitance number is
+ever read from it. It supplies the ``function`` attribute that `gen_cell_tb.py` builds its
+gold model from, so the transistors are checked against an independent description of what
+they should compute, at every corner, before any measurement is believed. Without it the
+run still works -- the function is measured either way -- and the console and
+``char_report.md`` both say the check was skipped. The proof that nothing is copied: for
+``sg13g2_nand2_1`` this tool emits ``function : "!A+!B"`` where IHP's library says
+``"!(A*B)"``; same function, independently derived.
+
+So the minimum for a cell nobody has a Liberty for yet is::
+
+    gen_cell_lib.py my_cell.spice --cell my_cell --inputs A,B --outputs Y \\
+        --model-lib .../cornerMOSlv.lib --no-verify
+
+``--area`` and ``--footprint`` are optional metadata. ``area`` defaults to 0 and only feeds
+area reports; ``cell_footprint`` groups pin-compatible cells so a synthesis tool may swap
+one for another (with ``in_place_swap_mode : match_footprint``), which is meaningful for a
+*family* of drive strengths and pointless for a single cell.
+
+
+Where the output goes
+---------------------
+``-o DIR``, or ``./lib`` relative to the working directory if it is not given -- never
+next to the netlist, which is frequently a read-only file inside a PDK install. The
+directory gets:
+
+    <libname>_<corner>.lib   one Liberty file per corner
+    char_report.md           function, truth table, arcs, unateness, pin capacitance,
+                             the slews a driver actually delivered, coverage notes
+    char_data.json           every measurement in SI units, for diffing runs
+    decks/                   everything that was simulated -- see below
+
+The decks are deleted on success unless ``--keep-decks`` is given, and always kept when a
+run fails, since that is when they are worth reading. Under ``decks/`` there is one
+directory per corner, named like the library, plus the verification decks::
+
+    decks/<corner>/op_<cell>.spice              .op per input vector: truth table + leakage
+    decks/<corner>/arc_<cell>_<pin>_<out>_<sense><state>_s<slew>[_a|_b].spice
+                                                one timing/power arc, a replica per load
+    decks/<corner>/cap_<cell>_<pin>.spice       input pin capacitance, a replica per state
+    decks/<corner>/cal_<pin>_<sense>_<edge>_<n>.spice   --driver-cell calibration attempts
+    decks/verify/<corner>/spice/tb_<cell>.spice the exhaustive functional testbench, written
+                                                by gen_cell_tb.py and run before measuring
+    decks/verify/<corner>/spice/tb_<cell>.plot.spice   ngspice plot script for that deck
+    decks/verify/<corner>/gold_functions.md     the Liberty function used per instance, the
+                                                gold equations and the truth table
+    decks/verify/<cell>_wrap.v                  the one-instance wrapper handed to
+                                                gen_cell_tb.py when the cell has no
+                                                structural Verilog view
+
+Every deck has its ngspice log beside it as ``<deck>.log``, starting with the command line
+that produced it, and every deck directory gets a ``.spiceinit`` (see the note next to
+SPICEINIT below). All of them are plain ngspice input: ``ngspice -b <deck>.spice`` in that
+directory reproduces exactly what this tool measured.
+
+
 The template contract  (--template, default scripts/lib_templates/sg13g2.lib.tmpl)
 ---------------------------------------------------------------------------------
 The library-level constants of a technology live in a template file, not in this script,
@@ -1567,6 +1642,20 @@ def _reduce(vals: list[float], pick) -> float:
 # --------------------------------------------------------------------------------------
 
 
+def structural_view(args, cell_name: str) -> bool:
+    """Is --verilog a structural netlist that defines this cell out of library cells?
+
+    Answered by trying to parse it as one. A behavioural model, or a file where some *other*
+    module is not structural (the PDK's sg13g2_stdcell.v has both), simply is not one.
+    """
+    if not args.verilog:
+        return False
+    try:
+        return cell_name in {m.name for m in tb.parse_netlist(args.verilog)}
+    except tb.GenError:
+        return False
+
+
 WRAP_V = """\
 // AUTO-GENERATED by scripts/{script} -- do not edit.
 // A one-instance wrapper so gen_cell_tb.py can build its exhaustive functional deck for a
@@ -1589,7 +1678,10 @@ def verify_corner(cell: CharCell, ctx: Ctx, args, workdir: Path) -> str:
     vdir = workdir / "verify"
     vdir.mkdir(parents=True, exist_ok=True)
 
-    verilog = args.verilog
+    # gen_cell_tb.py builds its gold model out of a *structural* netlist of library cells.
+    # A behavioural view -- which is what --verilog usually is, and what the PDK ships --
+    # is fine for pin directions but cannot serve as one, so fall back to the wrapper.
+    verilog = args.verilog if structural_view(args, cell.name) else None
     if verilog is None:
         # No structural view: wrap the cell in a module of the same name, so the deck is a
         # 2-way check of the transistors against the cell's own Liberty function.
@@ -1625,11 +1717,11 @@ def verify_corner(cell: CharCell, ctx: Ctx, args, workdir: Path) -> str:
     # against the cells it claims to be equivalent to. Without one, the wrapper instantiates
     # the cell itself, so the netlist is where its subckt has to come from.
     cell_spice = list(args.cell_spice)
-    if args.verilog is None:
+    if verilog is not args.verilog:
         cell_spice += [f for f in args.netlist if f not in cell_spice]
     for f in cell_spice:
         cmd += ["--cell-spice", str(f)]
-    if args.verilog is not None:
+    if verilog is args.verilog:
         for f in args.netlist:
             cmd += ["--custom-netlist", str(f)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -1986,6 +2078,90 @@ def emit_report(all_results: dict[str, list[CellResult]], corners: list[Corner],
 # --------------------------------------------------------------------------------------
 
 
+_RE_V_MODULE = re.compile(r"\bmodule\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\(([^;]*?)\)\s*;", re.S)
+_RE_V_DECL = re.compile(r"\b(input|output|inout)\b\s*(?:wire|reg|logic|signed|\s)*?(\[[^\]]*\])?\s*([\w\s,]+?)\s*;")
+_RE_V_DIR = re.compile(r"^\s*(input|output|inout)\b")
+
+
+def parse_verilog_ports(path: Path, module: str) -> tuple[list[str], list[str]]:
+    """Pin directions for one module, from *any* Verilog view of it.
+
+    Deliberately weaker than `gen_cell_tb.parse_netlist`, which needs a structural netlist
+    of named-port cell instances because it builds a gold model out of it. All that is
+    wanted here is which pins are inputs and which are outputs, and a behavioural model --
+    such as the PDK's own `sg13g2_stdcell.v`, written with gate primitives -- says that
+    perfectly well. Both port styles are accepted:
+
+        module m (Y, A, B);  output Y;  input A, B;     // non-ANSI
+        module m (input A, input B, output Y);          // ANSI
+
+    Ports are returned in the order the module header lists them, so the truth-table bit
+    order does not depend on how the declarations happen to be written.
+    """
+    src = tb.strip_comments(path.read_text())
+    for m in _RE_V_MODULE.finditer(src):
+        if m.group(1) != module:
+            continue
+        header = m.group(2)
+        rest = src[m.end():]
+        end = re.search(r"\bendmodule\b", rest)
+        body = rest[: end.start()] if end else rest
+        dirs: dict[str, str] = {}
+        order: list[str] = []
+
+        def take(name: str, direction: str) -> None:
+            name = name.strip()
+            if not name:
+                return
+            dirs[name] = direction
+            if name not in order:
+                order.append(name)
+
+        if _RE_V_DIR.search(header):  # ANSI: directions live in the header
+            cur = None
+            for item in header.split(","):
+                dm = _RE_V_DIR.search(item)
+                if dm:
+                    cur = dm.group(1)
+                    item = item[dm.end():]
+                item = re.sub(r"\b(wire|reg|logic|signed)\b", " ", item)
+                if "[" in item:
+                    raise CharError(
+                        f"{path}: module '{module}' port '{item.strip()}' is a vector; this "
+                        "generator characterizes scalar pins only"
+                    )
+                if cur is None:
+                    raise CharError(f"{path}: module '{module}' has an undeclared port")
+                take(item, cur)
+        else:  # non-ANSI: the header is a bare list, directions are declared in the body
+            order = [p.strip() for p in header.split(",") if p.strip()]
+            for direction, rng, names in _RE_V_DECL.findall(body):
+                if rng:
+                    raise CharError(
+                        f"{path}: module '{module}' declares a vector port {rng}; this "
+                        "generator characterizes scalar pins only"
+                    )
+                for name in names.split(","):
+                    take(name, direction)
+
+        missing = [p for p in order if p not in dirs]
+        if missing:
+            raise CharError(
+                f"{path}: module '{module}' port(s) {missing} have no input/output declaration"
+            )
+        inout = sorted(p for p, d in dirs.items() if d == "inout")
+        if inout:
+            raise CharError(
+                f"{path}: module '{module}' has inout port(s) {inout}, which cannot be "
+                "characterized as a timing arc"
+            )
+        return (
+            [p for p in order if dirs[p] == "input"],
+            [p for p in order if dirs[p] == "output"],
+        )
+    raise CharError(f"{path}: no module '{module}'")
+
+
 def resolve_cells(args) -> list[CharCell]:
     subckts = tb.parse_spice_subckts(list(args.netlist) + list(args.cell_spice))
     if not subckts:
@@ -2001,9 +2177,6 @@ def resolve_cells(args) -> list[CharCell]:
             )
         wanted = list(own)
 
-    verilog_mods = {}
-    if args.verilog:
-        verilog_mods = {m.name: m for m in tb.parse_netlist(args.verilog)}
     lib_cells = {}
     if args.lib:
         try:
@@ -2032,16 +2205,15 @@ def resolve_cells(args) -> list[CharCell]:
             if not (args.inputs and args.outputs):
                 raise CharError("--inputs and --outputs must be given together")
             ins, outs = args.inputs.split(","), args.outputs.split(",")
-        elif name in verilog_mods:
-            mod = verilog_mods[name]
-            ins, outs = mod.inputs, mod.outputs
+        elif args.verilog:
+            ins, outs = parse_verilog_ports(args.verilog, name)
         elif name in lib_cells:
             ins, outs = lib_cells[name].inputs, lib_cells[name].outputs
         else:
             raise CharError(
                 f"cannot tell which pins of '{name}' are inputs and which are outputs.\n"
                 "  A SPICE .subckt does not say. Give --inputs/--outputs, or a --verilog "
-                "netlist that declares the module, or a --lib that defines the cell."
+                "file declaring the module (behavioural is fine), or a --lib defining the cell."
             )
         ins = [i.strip() for i in ins if i.strip()]
         outs = [o.strip() for o in outs if o.strip()]
@@ -2127,8 +2299,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--power", default="VDD", metavar="PIN", help="supply pin (default: VDD)")
     ap.add_argument("--ground", default="VSS", metavar="PIN", help="ground pin (default: VSS)")
     ap.add_argument("--verilog", type=Path, metavar="FILE",
-                    help="structural Verilog netlist declaring the module: gives the pin "
-                    "directions, and lets gen_cell_tb.py build the functional check")
+                    help="Verilog file declaring the module: the source of the pin directions. "
+                    "Behavioural models work (the PDK's own sg13g2_stdcell.v does). A "
+                    "*structural* netlist additionally lets gen_cell_tb.py check this netlist "
+                    "against the cells it claims to be equivalent to, when --lib is also given")
     ap.add_argument("--lib", type=Path, metavar="FILE",
                     help="Liberty file used as the functional oracle (and, for a library cell, "
                     "as the source of pin directions)")
@@ -2150,7 +2324,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--lib-name", default=None, metavar="NAME",
                     help="library name stem (default: the netlist's stem)")
     ap.add_argument("-o", "--outdir", type=Path, default=None, metavar="DIR",
-                    help="output directory (default: <netlist dir>/lib)")
+                    help="output directory (default: ./lib, relative to where you run it -- "
+                    "never inside the PDK the netlist may come from)")
     ap.add_argument("--area", action="append", default=[], metavar="[CELL=]VALUE",
                     help="cell area for the Liberty 'area' attribute")
     ap.add_argument("--footprint", action="append", default=[], metavar="[CELL=]NAME")
@@ -2277,8 +2452,13 @@ def main(argv: list[str] | None = None) -> int:
     driver = resolve_driver(args)
     corners = [Corner.parse(c) for c in (args.corner or DEFAULT_CORNERS)]
     args.lib_name = args.lib_name or args.netlist[0].stem
-    outdir = args.outdir or args.netlist[0].parent / "lib"
-    outdir.mkdir(parents=True, exist_ok=True)
+    # ./lib, not <netlist dir>/lib: the netlist is very often a read-only PDK file, and
+    # writing results into a PDK install is both surprising and usually not permitted.
+    outdir = args.outdir or Path("lib")
+    try:
+        outdir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise CharError(f"cannot create the output directory {outdir}: {exc}\n  Use -o DIR.") from None
 
     cells = resolve_cells(args)
     for c in cells:

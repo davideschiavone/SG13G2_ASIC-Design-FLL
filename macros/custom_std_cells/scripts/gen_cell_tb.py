@@ -84,10 +84,16 @@ _RE_INST = re.compile(r"\b(\w+)\s+(\w+)\s*\((.*?)\)\s*;", re.S)
 _RE_CONN = re.compile(r"\.(\w+)\s*\(\s*(\w+)\s*\)")
 
 
+# Both comment forms in one left-to-right pass, line comments first in the alternation.
+# Stripping block comments in a separate earlier pass is wrong: a banner line like
+# `//*********` contains `/*`, so the block-comment pattern starts there and runs to the
+# next `*/` anywhere in the file. The PDK's own sg13g2_stdcell.v has 170 such `/*` against
+# a single real `*/`, and a two-pass strip deletes 80 of its 84 modules.
+_RE_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+
+
 def strip_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    text = re.sub(r"//[^\n]*", "", text)
-    return text
+    return _RE_COMMENT.sub(" ", text)
 
 
 def parse_netlist(path: Path) -> list[Module]:
