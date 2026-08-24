@@ -43,11 +43,16 @@ RAW2VCD  ?= $(MAKEFILE_DIR)../../mixed_signal/raw2vcd.py
 # Which testbench `make wave-sv` / `make wave-spice` opens.
 TB       ?=
 
+# Which layer to generate. Set per target below so that `make spice` does not also build
+# tb/sv and vice versa; `generate` and `all` do both.
+EMIT     ?= both
+
 GEN_FLAGS := --lib $(LIB) \
              $(addprefix --cell-verilog ,$(CELL_V)) \
              $(addprefix --cell-spice ,$(CELL_SP)) \
              --model-lib $(MODEL_LIB) --model-section $(MODEL_SECTION) --vdd $(VDD) \
              --raw2vcd $(RAW2VCD) \
+             --emit $(EMIT) \
              $(addprefix --custom-netlist ,$(CUSTOM)) \
              $(addprefix --module ,$(MODULE)) \
              -o $(TB_DIR)
@@ -59,12 +64,13 @@ help: ## Show this help message
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 .PHONY: help
 
-# What tb/ was last generated from. MODULE= and CUSTOM= change *which* testbenches are
-# emitted, which no file timestamp can express, so the signature is recorded and compared:
-# changing either -- including dropping them again to get the full set back -- regenerates.
+# What tb/ was last generated from. EMIT=, MODULE= and CUSTOM= change *which* testbenches
+# are emitted, which no file timestamp can express, so the signature is recorded and
+# compared: change any of them -- including dropping them to get the full set back -- and
+# the tree is regenerated.
 TB_STAMP := $(TB_DIR)/.generated
 TB_SIG   := $(TB_DIR)/.gen_sig
-GEN_SIG  := $(strip $(MODULE)|$(CUSTOM))
+GEN_SIG  := $(strip $(EMIT)|$(MODULE)|$(CUSTOM))
 
 generate: ## Regenerate tb/sv and tb/spice from the netlist and the PDK
 	python3 $(GEN) $(NETLIST) $(GEN_FLAGS)
@@ -82,31 +88,45 @@ ensure-tb: $(TB_STAMP)
 	fi
 .PHONY: ensure-tb
 
-verilator: ensure-tb ## Run the generated SystemVerilog testbenches with Verilator
+# EMIT is passed on the sub-make command line so each target only builds the layer it runs.
+ENSURE_SV    = $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) ensure-tb EMIT=sv
+ENSURE_SPICE = $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) ensure-tb EMIT=spice
+ENSURE_BOTH  = $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) ensure-tb EMIT=both
+
+verilator: ## Run the generated SystemVerilog testbenches with Verilator
+	@$(ENSURE_SV)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv verilator
 .PHONY: verilator
 
-icarus: ensure-tb ## Run the generated SystemVerilog testbenches with Icarus Verilog
+icarus: ## Run the generated SystemVerilog testbenches with Icarus Verilog
+	@$(ENSURE_SV)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv icarus
 .PHONY: icarus
 
-sv: ensure-tb ## Run the SystemVerilog testbenches (Verilator + Icarus)
+sv: ## Run the SystemVerilog testbenches (Verilator + Icarus)
+	@$(ENSURE_SV)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv all
 .PHONY: sv
 
-spice: ensure-tb ## Run the transistor-level SPICE testbenches with ngspice
+spice: ## Run the transistor-level SPICE testbenches with ngspice
+	@$(ENSURE_SPICE)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice spice
 .PHONY: spice
 
-all: sv spice ## Run every testbench: SystemVerilog and SPICE
+all: ## Run every testbench: SystemVerilog and SPICE
+	@$(ENSURE_BOTH)
+	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv all
+	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice spice
 .PHONY: all
 
 
-wave-sv: ensure-tb ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
+wave-sv: ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
+	@$(ENSURE_SV)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-sv
 
-wave-spice: ensure-tb ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<module>)
+wave-spice: ## Open a SPICE waveform in GTKWave (usage: make wave-spice TB=tb_<module>)
+	@$(ENSURE_SPICE)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/spice wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-spice
 

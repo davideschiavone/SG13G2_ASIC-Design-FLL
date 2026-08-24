@@ -41,7 +41,9 @@ all live under `/foss/pdks`, which the host cannot see.
 ```
 
 Every run target regenerates `tb/` first if it is missing, if `aion_cells.v` or the generator is
-newer, or if `MODULE=`/`CUSTOM=` differ from the last generation.
+newer, or if `MODULE=`/`CUSTOM=` differ from the last generation. Each target generates **only the
+layer it runs** — `make spice` does not build `tb/sv/`, and `make verilator` does not build
+`tb/spice/`. `generate` and `all` build both.
 
 | Target | What it does |
 | --- | --- |
@@ -98,11 +100,11 @@ generated:
 ./run.sh "make -C macros/custom_std_cells all   MODULE='AION_nand2_11 AION_a22oi_inv_10'"
 ```
 
-This works on **every** run target, not just `generate`. `MODULE=` and `CUSTOM=` change *which*
-testbenches are emitted, which no file timestamp can express, so the Makefile records them in
-`tb/.gen_sig` and regenerates whenever they differ from the last run. That means dropping them
-again restores the full set automatically — plain `make sv` after `make sv MODULE=X` regenerates
-all 16 — while repeating the same command does not regenerate anything.
+This works on **every** run target, not just `generate`. `MODULE=` and `CUSTOM=` — and which layer
+the target needs — change *which* testbenches are emitted, which no file timestamp can express, so
+the Makefile records that signature in `tb/.gen_sig` and regenerates whenever it differs from the
+last run. That means dropping them again restores the full set automatically — plain `make sv`
+after `make sv MODULE=X` regenerates all 16 — while repeating the same command regenerates nothing.
 
 ### Checking a custom implementation
 
@@ -284,20 +286,3 @@ The gold model is **not** derived from the Verilog being tested — it comes fro
 between the two models, and the cell semantics come from an independent source.
 `tb/gold_functions.md` lists, per module, the Liberty function used for each instance, the emitted
 gold equations, the outputs flattened down to the primary inputs, and the truth tables.
-
-### Why not `sp2bool`?
-
-The container ships lctime's `sp2bool`, which derives boolean functions straight from a transistor
-netlist — the obvious oracle. It does not work on this PDK:
-
-* `lctime/lccommon/net_util.py::get_channel_type()` calls a device NMOS only if its model name
-  *starts with* `n`. IHP's models are `sg13_lv_nmos` / `sg13_lv_pmos`, so every transistor is
-  treated as a PMOS and even `sg13g2_inv_1` comes out as `Y = True`.
-* With the model names shimmed to `nmos_lv`/`pmos_lv`, it still mis-solves the deeper series
-  stacks: `sg13g2_nand3_1`, `sg13g2_nand4_1` and `sg13g2_nor3_1` — 3 of the 16 cells used by
-  `aion_cells.v` — come back as constant `True`/`False`.
-
-The Liberty functions used instead were cross-checked against a direct transistor-network solve of
-`sg13g2_stdcell.cdl` (union-find connectivity to VDD/VSS per input vector) and agree for every cell
-used here. The `tb/spice/` layer is now a second, independent confirmation of the same thing: the
-actual devices, simulated.
