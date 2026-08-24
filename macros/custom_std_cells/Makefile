@@ -101,6 +101,7 @@ spice: ensure-tb ## Run the transistor-level SPICE testbenches with ngspice
 all: sv spice ## Run every testbench: SystemVerilog and SPICE
 .PHONY: all
 
+
 wave-sv: ensure-tb ## Open a SystemVerilog waveform in GTKWave (usage: make wave-sv TB=tb_<module>)
 	@$(MAKE) --no-print-directory -C $(TB_DIR)/sv wave $(if $(TB),TB=$(TB),)
 .PHONY: wave-sv

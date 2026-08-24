@@ -1105,8 +1105,10 @@ TB      ?= @EXAMPLETB@
 TBS := \\
 @TBLIST@
 
-# RAW=1 writes an ngspice ASCII rawfile per module into build/, for waveform viewing.
-ifeq ($(RAW),1)
+# Waveforms, same switch as the SystemVerilog side:
+#   VCD=1  keep the rawfile and convert it to a VCD GTKWave can open
+#   RAW=1  keep the ngspice rawfile only
+ifneq ($(filter 1,$(VCD) $(RAW)),)
 NGSPICE_FLAGS += -r $(BUILD)/$$tb.raw
 endif
 
@@ -1124,6 +1126,10 @@ spice: ## Run every SPICE testbench with ngspice
 \t\t\t> $(BUILD)/$$tb.run.log 2>&1 || fail=1; \\
 \t\tgrep -E '^\\[(PASS|FAIL)\\]' $(BUILD)/$$tb.run.log \\
 \t\t\t|| { echo "[NO-RESULT] $$tb"; tail -20 $(BUILD)/$$tb.run.log; fail=1; }; \\
+\t\tif [ "$(VCD)" = 1 ]; then \\
+\t\t\t[ -n "$(RAW2VCD)" ] || { echo "set RAW2VCD=<path to raw2vcd.py>"; exit 1; }; \\
+\t\t\tpython3 $(RAW2VCD) $(BUILD)/$$tb.raw $(BUILD)/$$tb.vcd > /dev/null || fail=1; \\
+\t\tfi; \\
 \tdone; \\
 \tif [ $$fail -ne 0 ]; then echo "ngspice: FAILED"; exit 1; fi; \\
 \techo "ngspice: all $(words $(TBS)) testbenches passed"
@@ -1132,22 +1138,8 @@ spice: ## Run every SPICE testbench with ngspice
 all: spice ## Alias for 'spice'
 .PHONY: all
 
-raw: ## Re-run every testbench and keep an ngspice rawfile per module
-\t@$(MAKE) --no-print-directory -C $(MAKEFILE_DIR) spice RAW=1
-.PHONY: raw
-
-vcd: ## Convert every rawfile in build/ to a VCD GTKWave can open
-\t@[ -n "$(RAW2VCD)" ] || { echo "set RAW2VCD=<path to raw2vcd.py>"; exit 1; }
-\t@ls $(BUILD)/*.raw >/dev/null 2>&1 || { echo "no rawfile: run 'make raw' first"; exit 1; }
-\t@for f in $(BUILD)/*.raw; do \\
-\t\tpython3 $(RAW2VCD) $$f $${f%.raw}.vcd && echo "$${f%.raw}.vcd"; \\
-\tdone
-.PHONY: vcd
-
-wave: ## Simulate with waveforms and open one in GTKWave (usage: make wave TB=<tb_name>)
-\t@[ -f $(BUILD)/$(TB).raw ] || $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) raw
-\t@[ -n "$(RAW2VCD)" ] || { echo "set RAW2VCD=<path to raw2vcd.py>"; exit 1; }
-\tpython3 $(RAW2VCD) $(BUILD)/$(TB).raw $(BUILD)/$(TB).vcd
+wave: ## Simulate with VCD and open one in GTKWave (usage: make wave TB=<tb_name>)
+\t@[ -f $(BUILD)/$(TB).vcd ] || $(MAKE) --no-print-directory -C $(MAKEFILE_DIR) spice VCD=1
 \tDISPLAY=$(DISPLAY) gtkwave $(BUILD)/$(TB).vcd
 .PHONY: wave
 
@@ -1199,37 +1191,33 @@ Per-deck logs land in `build/<tb>.run.log`.
 | `help` | list the targets (default target) |
 | `spice` | run every deck, report pass/fail, exit non-zero if any failed |
 | `all` | alias for `spice` |
-| `raw` | re-run keeping an ngspice rawfile per module |
-| `vcd` | convert every rawfile in `build/` to VCD |
-| `wave` | simulate, convert and open one in GTKWave (`TB=<tb_name>`) |
+| `wave` | simulate with `VCD=1` and open one in GTKWave (`TB=<tb_name>`) |
 | `clean` | remove `build/` |
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `NGSPICE` | `ngspice` | simulator binary |
 | `NGSPICE_FLAGS` | `-b` | extra flags |
-| `RAW` | unset | `RAW=1` writes `build/<tb>.raw` |
+| `VCD` | unset | `VCD=1` writes `build/<tb>.vcd` (and the rawfile it came from) |
+| `RAW` | unset | `RAW=1` writes `build/<tb>.raw` only |
 | `RAW2VCD` | *(from `--raw2vcd`)* | rawfile-to-VCD converter |
 | `TB` | `@EXAMPLETB@` | which testbench `make wave` opens |
 | `DISPLAY` | `:1` | X display GTKWave opens on (the noVNC desktop) |
 
 ### Waveforms
 
-Off by default. One command does the lot — simulate, convert, open:
+Off by default, and turned on with the **same switch as the SystemVerilog testbenches**:
 
 ```bash
-make wave TB=@EXAMPLETB@
+make spice VCD=1        # -> build/<tb>.vcd for every module
+make spice RAW=1        # -> build/<tb>.raw only, no conversion
+make wave  TB=@EXAMPLETB@   # simulate with VCD=1, then open GTKWave
 ```
 
-GTKWave is a GUI, so run that from the noVNC desktop (http://localhost/?password=abc123), not from
-a headless shell. To just produce the files:
+GTKWave is a GUI, so run `wave` from the noVNC desktop (http://localhost/?password=abc123), not
+from a headless shell.
 
-```bash
-make raw      # -> build/<tb>.raw   for every module
-make vcd      # -> build/<tb>.vcd   for every rawfile
-```
-
-GTKWave cannot read an ngspice rawfile, hence the conversion step; each deck does
+GTKWave cannot read an ngspice rawfile, so `VCD=1` converts it; each deck does
 `set filetype=ascii` so the rawfile is in the text form the converter expects. Every node becomes
 a VCD `real`, which GTKWave draws as an analog trace — so you see the actual switching waveforms,
 not just 0/1.

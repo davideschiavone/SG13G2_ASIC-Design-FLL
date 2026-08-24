@@ -153,15 +153,20 @@ with dumping on, converts if needed, and opens GTKWave:
 (http://localhost/?password=abc123) — a headless `./run.sh` will just block. `DISPLAY` defaults
 to `:1`, the noVNC display.
 
-To only produce the files, without opening anything:
+To only produce the files, without opening anything — these are headless, so `./run.sh` is fine.
+**`VCD=1` is the same switch in both layers:**
 
 ```bash
-./run.sh "make -C macros/custom_std_cells verilator VCD=1"       # tb/sv/build/vlt/<tb>/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells spice     VCD=1"       # tb/spice/build/<tb>.vcd
 ./run.sh "make -C macros/custom_std_cells icarus    VCD=1"       # tb/sv/build/icarus/<tb>.vcd
-./run.sh "make -C macros/custom_std_cells/tb/spice  raw"         # tb/spice/build/<tb>.raw
-./run.sh "make -C macros/custom_std_cells/tb/spice  vcd"         # tb/spice/build/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells verilator VCD=1"       # tb/sv/build/vlt/<tb>/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells all       VCD=1"       # all three at once
 find macros/custom_std_cells/tb -name '*.vcd'
 ```
+
+`MODULE=` and `CUSTOM=` combine with it as usual, e.g.
+`make spice VCD=1 MODULE=AION_nand2_11`. On the SPICE side `RAW=1` is also accepted if you want
+the ngspice rawfile without the VCD conversion; `VCD=1` keeps both.
 
 GTKWave cannot read an ngspice rawfile, so the SPICE decks `set filetype=ascii` and
 `mixed_signal/raw2vcd.py` converts it (`RAW2VCD` in the Makefile). Every node becomes a VCD `real`,
