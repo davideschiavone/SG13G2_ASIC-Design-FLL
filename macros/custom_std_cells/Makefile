@@ -221,11 +221,21 @@ lib-template: ## Print the Liberty template used to build the libraries
 	@python3 $(GEN_LIB) --template $(LIB_TMPL) --print-template
 .PHONY: lib-template
 
-clean: ## Delete the whole generated tb/ directory (testbenches and build products)
-	rm -rf $(TB_DIR)
+# Everything either generator writes. Both trees are git-ignored and fully reproducible
+# from the netlist plus the PDK, so `clean` takes the lot; the narrower targets below are
+# for when only one layer is in the way.
+GENERATED := $(TB_DIR) $(LIB_DIR) $(SELFCHECK_DIR)
+
+clean: ## Delete everything generated: tb/, lib/ and lib-selfcheck/
+	rm -rf $(GENERATED)
+	@echo "removed: $(notdir $(GENERATED))"
 .PHONY: clean
 
-clean-lib: ## Delete the generated Liberty directories
+clean-tb: ## Delete only the generated tb/ directory (testbenches and build products)
+	rm -rf $(TB_DIR)
+.PHONY: clean-tb
+
+clean-lib: ## Delete only the generated Liberty directories (lib/, lib-selfcheck/)
 	rm -rf $(LIB_DIR) $(SELFCHECK_DIR)
 .PHONY: clean-lib
 

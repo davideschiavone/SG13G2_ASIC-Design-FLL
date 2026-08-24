@@ -76,9 +76,10 @@ layer it runs** — `make spice` does not build `tb/sv/`, and `make verilator` d
 | `lib` | characterize a cell into one Liberty file per corner — see [below](#liberty-characterization--scriptsgen_cell_libpy) |
 | `lib-selfcheck` | characterize a PDK cell and diff the result against the PDK's own `.lib` |
 | `lib-template` | print the Liberty template the libraries are built from |
-| `clean` | delete the whole generated `tb/` directory |
-| `clean-build` | delete only the build products, keep the generated testbenches |
-| `clean-lib` | delete `lib/` and `lib-selfcheck/` |
+| `clean` | **delete everything generated**: `tb/`, `lib/` and `lib-selfcheck/` |
+| `clean-tb` | delete only `tb/` (testbenches and build products) |
+| `clean-lib` | delete only `lib/` and `lib-selfcheck/` |
+| `clean-build` | delete only the simulator build products, keep the generated testbenches |
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
