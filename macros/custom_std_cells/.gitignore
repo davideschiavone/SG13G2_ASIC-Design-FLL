@@ -1,0 +1,4 @@
+# tb/ is generated in full by scripts/gen_cell_tb.py from aion_cells.v and the PDK
+# Liberty functions -- testbenches, Makefile, README and gold_functions.md alike.
+# Regenerate it with `make generate` instead of tracking it.
+tb/
