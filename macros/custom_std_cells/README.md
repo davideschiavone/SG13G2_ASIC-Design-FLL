@@ -464,7 +464,10 @@ libraries built from it. `make lib-template` prints the built-in one as a starti
   (arc, sense, side state, slew) holds a replica per output load, and one input pulse gives *both*
   output edges — so all four timing tables and both switching energies come out of one transient.
   The input is a linear ramp of `slew / (slew_upper − slew_lower)`, so its *measured* slew is the
-  index value the table is built on.
+  index value the table is built on. (`--input-ramp full` instead spans the whole swing in the
+  index value, as lctime's `StepWave` does — which makes the stimulus ~1.7× steeper than its own
+  index claims. Reproducing IHP's tables that way is 13–16% off instead of 3.6–4.8%, so the
+  reference agrees with the Liberty reading, not with lctime's.)
 * **Internal energy** is port accounting over a settled-to-settled window, each port's power
   integrated by a B-source:
   `E = E_supply + E_input − E_load − ½·C·VDD²`.
@@ -493,20 +496,61 @@ written from (typ corner, both arcs):
 | `rise_power` | 47 – 57% | 160% |
 | `fall_power` | 23 – 45% | 96% |
 
-Timing is good to a few percent, and the residual is a smooth function of the grid rather than
-noise — it grows with input slew, which is what driving the input with a linear ramp instead of a
-real driver waveform would do.
+Timing is good to a few percent. Where the rest comes from is **known, not guessed**: the PDK's
+own `libs.ref/sg13g2_stdcell/doc/ReleaseNotes.txt` says of Rev0.1.0 that the cells were
 
-**Internal power is an estimate and is reported as one.** The *total* switching energy per cycle
-agrees to roughly 12%, but its split between the two edges does not match IHP's; their convention
-for which edge is charged with the gate-coupling charge could not be recovered from the shipped
-tables. Input capacitance reads about 30% above IHP's headline number partly by choice —
-`--cap-combine max` keeps the worst side-input state, the one where the output switches and Miller
-feedback is included; `--cap-combine mean` lands closer, and the per-state spread is emitted as
+> re-characterized with updated **QRC tech file** and **'buf_1' active driver setting for all
+> input pins**
+
+— i.e. the reference was measured on a *parasitic-extracted* netlist with every input driven by a
+real `sg13g2_buf_1`, while this tool characterizes the netlist it is handed and drives it with an
+ideal linear ramp. Both differences were measured on `sg13g2_nand2_1`:
+
+| what was characterized | mean delay dev | worst grid point |
+| --- | --- | --- |
+| the PDK's **schematic** netlist (as shipped) | 3.6 – 4.8% | 11% |
+| Magic **device-only** extraction (layout junctions, no wiring caps) | 3.6 – 4.6% | 7 – 10% |
+| Magic **full RC** extraction | 4.1 – 5.4% | 17 – 20% |
+
+The shipped schematic netlist is pessimistic — it gives every device a full-size drain *and*
+source, where the real layout shares diffusions — and full Magic extraction overshoots. The
+reference sits between the two, which is where a QRC extraction belongs. Replacing the ramp with a
+real `sg13g2_buf_1` driver moves the slow end of the grid from +11% to about **+1%**, and the fast
+end from −3% to +8%.
+
+**Internal power is an estimate and is reported as one.** The total switching energy per cycle
+comes out around 1.4–1.5× IHP's, and that ratio **survives both corrections above**: the
+device-only extraction improves `fall_power` from 45% to 28% mean deviation but leaves `rise_power`
+at 47%, and the active driver merely swaps energy between the two edges (3.28/2.83 fJ instead of
+2.65/3.62 fJ — same total). So what remains is an accounting convention, not a setup difference,
+and it lives in how much of the *gate-coupling charge* — the charge the switching pin's gate
+exchanges with the cell's own VDD rail, several fJ here — is charged to the cell rather than to its
+driver. Nobody agrees on this: lctime adds the full input-port energy and subtracts no load energy
+at all, and its own source carries a *"TODO: what unit does rise_power have… is it really power or
+energy?"* next to a warning for the negative energies that convention produces.
+
+Input capacitance reads about 30% above IHP's headline number partly by choice — `--cap-combine
+max` keeps the worst side-input state, the one where the output switches and Miller feedback is
+included; `--cap-combine mean` lands closer, and the per-state spread is emitted as
 `rise_capacitance_range` either way.
 
 Don't take that table on trust when the cell or the PDK changes — re-measure it with
 `--compare-lib`.
+
+### Characterizing post-layout
+
+Since the reference flow characterizes an extracted netlist, so should you, once a custom cell has
+a layout. The tool takes any SPICE netlist, so an extraction is just a different input file:
+
+```bash
+# device-only (layout-derived junctions, no wiring caps) — closest match to the PDK's own tables
+./run.sh "magic -dnull -noconsole -rcfile \$PDK_ROOT/\$PDK/libs.tech/magic/ihp-sg13g2.magicrc extract.tcl"
+./run.sh "make -C macros/custom_std_cells lib CUSTOM=/path/to/cell.dev.spice MODULE=<cell>"
+```
+
+with `ext2spice cthresh infinite` for device-only, or `ext2spice cthresh 0` to keep every
+parasitic capacitance. Note that the extracted `.subckt`'s port order differs from the schematic's,
+so pass `--inputs`/`--outputs` (or a `--lib`) rather than relying on port order.
 
 ## Limitations, stated rather than hidden
 

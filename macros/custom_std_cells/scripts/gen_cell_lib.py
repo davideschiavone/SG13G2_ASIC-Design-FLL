@@ -121,17 +121,41 @@ run this was written from (typ corner, both arcs):
     leakage, per state    -1% to -38% depending on the state
 
 Timing is good to a few percent, and the residual is a smooth function of the grid rather
-than noise -- it grows with input slew, which is what a linear input ramp instead of a real
-driver waveform would do.
+than noise. Where the rest of it comes from is known rather than guessed --
+``libs.ref/sg13g2_stdcell/doc/ReleaseNotes.txt`` says of Rev0.1.0 that the cells were
+"re-characterized with updated QRC tech file and 'buf_1' active driver setting for all
+input pins". So the reference was measured on a *parasitic-extracted* netlist, with every
+input driven by a real ``sg13g2_buf_1`` cell. This tool uses the netlist it is handed and
+an ideal linear ramp. Both differences were measured on ``sg13g2_nand2_1``:
 
-Internal power is an estimate, and is reported as such. The *total* switching energy per
-cycle agrees to roughly 12%, but its split between the two edges does not match IHP's:
-their convention for which edge is charged with the gate-coupling charge could not be
-recovered from the shipped tables. Input capacitance reads high partly by choice --
-``--cap-combine max`` keeps the worst side-input state, which is the one where the output
-switches and Miller feedback is included; ``--cap-combine mean`` lands closer to IHP's
-headline number, and the per-state spread is emitted as ``rise_capacitance_range`` either
-way.
+* **netlist.** Characterizing the PDK's schematic netlist, a Magic device-only extraction
+  (layout-derived shared-diffusion junctions, no wiring caps) and a full Magic RC
+  extraction gives mean delay deviations of 3.6-4.8%, 3.6-4.6% and 4.1-5.4%, with worst
+  grid points of 11%, 7-10% and 17-20%. The shipped schematic netlist is pessimistic --
+  it gives every device a full-size drain *and* source -- and full Magic extraction
+  overshoots; the reference sits between the two, which is where a QRC extraction would.
+* **stimulus.** Driving pin A through a real ``sg13g2_buf_1`` instead of a ramp moves the
+  delay at the slow end of the grid from +11% to about +1%, and the fast end from -3% to
+  +8%. An active driver is the more faithful stimulus, and ``--input-ramp`` does not do it
+  -- it only changes the ramp's slope, not its shape.
+
+Internal power is an estimate, and is reported as such. The total switching energy per
+cycle comes out around 1.4-1.5x IHP's, and that ratio survives *both* corrections above:
+the device-only extraction moves ``fall_power`` from 45% to 28% mean deviation but leaves
+``rise_power`` at 47%, and the active driver merely swaps energy between the two edges
+(3.28/2.83 fJ instead of 2.65/3.62 fJ, total unchanged). So what is left is an accounting
+convention, not a setup difference, and it lives in how much of the gate-coupling charge
+-- the charge the switching pin's gate exchanges with the cell's own VDD rail, worth
+several fJ here -- is charged to the cell rather than to its driver. Nobody agrees on
+this: lctime adds the full input-port energy and subtracts no load energy at all (see
+"Why not lctime?"), and its own source carries both a "TODO: what unit does rise_power
+have... is it really power or energy?" and a warning for the negative energies that
+convention produces.
+
+Input capacitance reads high partly by choice -- ``--cap-combine max`` keeps the worst
+side-input state, the one where the output switches and Miller feedback is included;
+``--cap-combine mean`` lands closer to IHP's headline number, and the per-state spread is
+emitted as ``rise_capacitance_range`` either way.
 
 Anything that depends on a reference library can be re-measured for any cell with
 ``--compare-lib``; do not take the table above on trust when the cell or the PDK changes.
@@ -149,7 +173,20 @@ The container ships lctime, which does this job. It cannot be used on this PDK f
 same reason `gen_cell_tb.py` documents for ``sp2bool``: ``lccommon/net_util.py::
 get_channel_type()`` calls a device NMOS only when its model name starts with ``n``, and
 IHP's models are ``sg13_lv_nmos`` / ``sg13_lv_pmos``, so every transistor is taken to be a
-PMOS.
+PMOS. Two further differences came out of reading its source, both of which this tool
+deliberately does otherwise:
+
+* ``characterization/timing_combinatorial.py`` builds its stimulus as
+  ``StepWave(rise_threshold=0, fall_threshold=1, transition_time=input_transition_time)``,
+  which spans the *whole* swing in the index value -- so the measured 20-80 slew of the
+  stimulus is only 0.6 of the number the table is indexed by. Liberty defines
+  ``input_net_transition`` between the library's slew thresholds, which is what
+  ``--input-ramp measured`` (the default) does. Running the calibration with
+  ``--input-ramp full`` to imitate lctime moves the mean delay deviation from 3.6-4.8% to
+  13-16%, so the reference library agrees with the Liberty reading, not with lctime's.
+* its switching energy is ``supply_energy + gate_energy`` with no load term at all, so its
+  ``rise_power`` grows with the load capacitance -- which the shipped tables plainly do not
+  do (they are nearly flat in load, which is only possible if the load energy is removed).
 """
 
 from __future__ import annotations
@@ -463,6 +500,7 @@ class Ctx:
     th: Thresholds
     settle: float
     corner: Corner
+    input_ramp: str = "measured"
 
     @property
     def vth_in(self) -> float:
@@ -473,7 +511,23 @@ class Ctx:
         return self.vdd * self.th.output_pct
 
     def ramp_of(self, slew: float) -> float:
-        """Full 0->VDD ramp whose measured lower..upper slew equals `slew`."""
+        """Full 0->VDD ramp time for a grid point whose index value is `slew`.
+
+        Which is a convention, not a fact, and characterizers disagree:
+
+        ``measured`` (default) makes the *measured* lower..upper transition of the stimulus
+        equal the index value, so a 20/80 library with an index of 18.6 ps is driven by a
+        31 ps full-swing ramp. This is what Liberty's definition of ``input_net_transition``
+        asks for, with ``slew_derate_from_library`` at 1.
+
+        ``full`` drives a full-swing ramp of exactly the index value, so the measured 20-80
+        slew is only 0.6 of it. lctime does this (``StepWave`` with rise_threshold=0 and
+        fall_threshold=1 spans the whole swing in ``input_transition_time``), and a vendor
+        library characterized that way is driven ~1.7x more steeply than its index claims.
+        Use it to reproduce such a library rather than to build a correct one.
+        """
+        if self.input_ramp == "full":
+            return slew
         span = self.th.slew_upper - self.th.slew_lower
         if span <= 0:
             raise CharError("slew upper threshold must be above the lower threshold")
@@ -1770,6 +1824,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="load on the outputs that are not being measured (default: 0.001)")
     ap.add_argument("--settle", type=float, default=1.0, metavar="X",
                     help="multiplier on the settling allowance between edges (default: 1)")
+    ap.add_argument("--input-ramp", choices=("measured", "full"), default="measured",
+                    help="what a slew index value means for the stimulus: 'measured' (default) "
+                    "drives a ramp whose measured lower..upper transition equals the index, as "
+                    "Liberty defines it; 'full' drives a full-swing ramp of exactly the index, "
+                    "as lctime does. Use 'full' only to reproduce a library built that way")
     ap.add_argument("--energy-unit", default="auto", metavar="J",
                     help="SI value of the internal-power table unit (default: auto = "
                     "capacitive_load_unit * voltage_unit^2)")
@@ -1876,6 +1935,7 @@ def main(argv: list[str] | None = None) -> int:
             th=tmpl.thresholds,
             settle=args.settle,
             corner=corner,
+            input_ramp=args.input_ramp,
         )
         workdir = outdir / "decks" / corner.tag
         print(f"[{corner.tag}] characterizing {len(cells)} cell(s) ...", flush=True)
