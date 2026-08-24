@@ -34,6 +34,13 @@ WAVEFORM_VIEWER ?= gtkwave
 # Override with: make <target> VERSION=<version>
 VERSION ?= 1.0.0
 
+# IIC-OSIC-TOOLS container settings (host-side targets: docker-install, docker-start, docker-stop, docker-status)
+# Override with: make docker-<target> DOCKER_TOOLS_DIR=<path> DOCKER_IMAGE_TAG=<tag>
+DOCKER_TOOLS_DIR    ?= $(HOME)/tools
+DOCKER_IMAGE_TAG    ?= 2026.05
+DOCKER_CONTAINER_NAME ?= iic-osic-tools_xvnc_uid_$(shell id -u)
+DOCKER_DESIGNS_DIR  ?= $(shell dirname $(MAKEFILE_DIR))
+
 # Folder structure
 XSCHEM_SCH_DIR  := schematic/xschem
 XSCHEM_TB_DIR   := testbenches/xschem
@@ -79,6 +86,34 @@ help: ## Show this help message
 init-submodules: ## Initialize and update git submodules (e.g. flow/artistic)
 	git -C $(MAKEFILE_DIR) submodule update --init
 .PHONY: init-submodules
+# ================================================================================================
+
+
+# Docker/Container Setup Targets (run these on the HOST, not inside the container; see run.sh)
+docker-install: ## Download the IIC-OSIC-TOOLS VNC launcher into DOCKER_TOOLS_DIR (usage: make docker-install [DOCKER_TOOLS_DIR=<path>])
+	mkdir -p $(DOCKER_TOOLS_DIR)
+	curl -fsSL https://raw.githubusercontent.com/iic-jku/IIC-OSIC-TOOLS/main/start_vnc.sh -o $(DOCKER_TOOLS_DIR)/start_vnc.sh
+	chmod +x $(DOCKER_TOOLS_DIR)/start_vnc.sh
+	@echo "Installed $(DOCKER_TOOLS_DIR)/start_vnc.sh. Next: make docker-start"
+.PHONY: docker-install
+
+docker-start: ## Start (or create) the IIC-OSIC-TOOLS container for this repo (usage: make docker-start [DOCKER_IMAGE_TAG=<tag>])
+	@if [ ! -x "$(DOCKER_TOOLS_DIR)/start_vnc.sh" ]; then \
+		echo "$(DOCKER_TOOLS_DIR)/start_vnc.sh not found, run 'make docker-install' first."; \
+		exit 1; \
+	fi
+	cd $(DOCKER_TOOLS_DIR) && DOCKER_TAG=$(DOCKER_IMAGE_TAG) DESIGNS=$(DOCKER_DESIGNS_DIR) CONTAINER_NAME=$(DOCKER_CONTAINER_NAME) IIC_OSIC_TOOLS_QUIET=1 ./start_vnc.sh
+	@echo "noVNC GUI: http://localhost/?password=abc123"
+	@echo "Verify with: ./run.sh \"make help\""
+.PHONY: docker-start
+
+docker-stop: ## Stop the running IIC-OSIC-TOOLS container
+	docker stop $(DOCKER_CONTAINER_NAME)
+.PHONY: docker-stop
+
+docker-status: ## Show the IIC-OSIC-TOOLS container status
+	docker ps -a --filter name=$(DOCKER_CONTAINER_NAME) --format '{{.Names}}: {{.Status}}'
+.PHONY: docker-status
 # ================================================================================================
 
 

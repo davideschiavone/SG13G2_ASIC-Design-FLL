@@ -21,6 +21,30 @@ counter + servo + lock detect) is a documented future extension.
 See [`CLAUDE.md`](CLAUDE.md) for the full v1 spec (pin map, parameters, methodology),
 and [`COMMANDS.md`](COMMANDS.md) for a command cheat-sheet (sim/wave/xschem for every block).
 
+## Setup: EDA container (do this first)
+
+All tools (Xschem, Magic, KLayout, ngspice, Yosys, OpenROAD, LibreLane, cocotb, …)
+run inside the **IIC-OSIC-TOOLS** Docker container, not on the host. Requires Docker
+installed on the host. Run these targets from a plain host shell (**not** through
+`./run.sh`, which itself talks to the container):
+
+```bash
+make docker-install   # fetch the IIC-OSIC-TOOLS launcher into ~/tools (once)
+make docker-start     # pull the image (2026.05+) and start the container
+```
+
+This mounts the parent of this repo into the container at `/foss/designs`, so the
+repo shows up inside the container at `/foss/designs/SG13G2_ASIC-Design-FLL`. The
+container name and image tag can be overridden, e.g.
+`make docker-start DOCKER_IMAGE_TAG=2026.05`; see `make help` for all `docker-*`
+targets (`docker-stop`, `docker-status`).
+
+Once the container is running:
+- Run any `make` target from the host with the `./run.sh` wrapper, e.g.
+  `./run.sh "make help"` or `./run.sh "make sim-rtl-cocotb CELL=fll_digital"`.
+- GUI tools (Xschem, KLayout, OpenROAD viewers) are viewed in a browser via noVNC at
+  `http://localhost/?password=abc123`.
+
 > **Provenance & attribution.** This repository is built on JKU's open-source
 > **[ihp-sg13g2-ams-chip-template](https://github.com/iic-jku/ihp-sg13g2-ams-chip-template)**
 > by **Simon Dorrer and Harald Pretl** (Institute for Integrated Circuits and Quantum
