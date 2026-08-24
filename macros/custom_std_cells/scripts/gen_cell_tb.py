@@ -952,14 +952,26 @@ Override any of them on the command line, e.g.
 Off by default. Build with `VCD=1` and each testbench dumps its full hierarchy:
 
 ```bash
-make verilator VCD=1     # -> build/vlt/<tb>/<tb>.vcd
-make icarus    VCD=1     # -> build/icarus/<tb>.vcd
+make verilator VCD=1
+make icarus    VCD=1
+make all       VCD=1
 ```
+
+Each testbench writes its VCD next to its own simulation binary, so the two simulators land in
+different directories — one file per module in each:
+
+| Simulator | VCD path | example for `@EXAMPLETB@` |
+| --- | --- | --- |
+| Verilator | `build/vlt/<tb>/<tb>.vcd` | `build/vlt/@EXAMPLETB@/@EXAMPLETB@.vcd` |
+| Icarus | `build/icarus/<tb>.vcd` | `build/icarus/@EXAMPLETB@.vcd` |
+
+The extra per-testbench subdirectory on the Verilator side is that testbench's `--Mdir`.
+`find build -name '*.vcd'` lists whatever was produced.
 
 `VCD=1` adds `+define+VCD --trace` for Verilator and `-DVCD` for Icarus, which enables the
 `$dumpfile`/`$dumpvars` block in each testbench. Since the stimulus is a `#1`-per-vector sweep,
 vector *n* sits at time *n+1* ns, and `diff`/`correct` show exactly where a mismatch occurs.
-Note that a run is cached by its build directory, so switch `VCD` and the testbenches are rebuilt.
+Switching `VCD` on or off changes the compile, so the testbenches are rebuilt.
 
 `verilator` and `icarus` keep going after a failing testbench so one run reports every problem, and
 exit non-zero if any of them failed. Per-testbench compile and run logs are left in
@@ -1139,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
                 catdut=", ".join(reversed(example.module.outputs)),
                 catgold=", ".join(example.gold_name(o) for o in reversed(example.module.outputs)),
                 examplemod=example.module.name,
+                exampletb=f"tb_{example.module.name}",
                 examplevec=str(2 ** len(example.module.inputs)),
                 examplegold="\n".join(
                     f"assign {example.gold_name(ga.net)} = {gold_sv_expr(example, ga)};"

@@ -66,18 +66,41 @@ is newer than it.
 No VCD is written by default. Pass `VCD=1` to turn dumping on:
 
 ```bash
-./run.sh "make -C macros/custom_std_cells verilator VCD=1"   # tb/build/vlt/<tb>/<tb>.vcd
-./run.sh "make -C macros/custom_std_cells icarus    VCD=1"   # tb/build/icarus/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells verilator VCD=1"
+./run.sh "make -C macros/custom_std_cells icarus    VCD=1"
+./run.sh "make -C macros/custom_std_cells all       VCD=1"   # both
 ```
 
-That adds `+define+VCD --trace` for Verilator and `-DVCD` for Icarus, enabling the
-`$dumpfile`/`$dumpvars` block in each testbench, which dumps the whole hierarchy — stimulus,
-DUT internals, gold signals and `diff`. The sweep advances one vector per `#1`, so vector *n*
-is at time *n+1* ns. View them from the noVNC desktop:
+Each testbench writes its VCD next to its own simulation binary, so **the two simulators land in
+different directories** — one file per module in each:
+
+| Simulator | VCD path |
+| --- | --- |
+| Verilator | `macros/custom_std_cells/tb/build/vlt/<tb>/<tb>.vcd` |
+| Icarus | `macros/custom_std_cells/tb/build/icarus/<tb>.vcd` |
+
+Note the extra per-testbench subdirectory on the Verilator side (it is that testbench's `--Mdir`).
+For example, for `tb_AION_nand2_11`:
 
 ```bash
-./run.sh "gtkwave macros/custom_std_cells/tb/build/icarus/tb_AION_nand2_11.vcd"   # or surfer
+# Verilator
+./run.sh "gtkwave macros/custom_std_cells/tb/build/vlt/tb_AION_nand2_11/tb_AION_nand2_11.vcd"
+# Icarus
+./run.sh "gtkwave macros/custom_std_cells/tb/build/icarus/tb_AION_nand2_11.vcd"
 ```
+
+`gtkwave` and `surfer` are GUI tools: launch them from the noVNC desktop
+(http://localhost/?password=abc123), not from a headless shell. To list what was produced:
+
+```bash
+find macros/custom_std_cells/tb/build -name '*.vcd'
+```
+
+`VCD=1` adds `+define+VCD --trace` for Verilator and `-DVCD` for Icarus, enabling the
+`$dumpfile`/`$dumpvars` block in each testbench, which dumps the whole hierarchy — stimulus,
+DUT internals, gold signals and `diff`/`correct`. The sweep advances one vector per `#1`, so
+vector *n* is at time *n+1* ns and `correct` going low marks the failing vector. Switching `VCD`
+on or off changes the compile, so the testbenches are rebuilt.
 
 A passing run prints one line per module per simulator, and exits non-zero if any module fails:
 
