@@ -626,6 +626,14 @@ def emit_tb(gm: GoldModel, script: str, netlist: str, lib: str) -> str:
     add("")
     add("  int errors = 0;")
     add("")
+    add("  // ---- waveforms: build with VCD=1 (Verilator needs --trace) ----")
+    add("`ifdef VCD")
+    add("  initial begin")
+    add(f'    $dumpfile("{tb}.vcd");')
+    add(f"    $dumpvars(0, {tb});")
+    add("  end")
+    add("`endif")
+    add("")
     add("  initial begin")
     add("    for (int unsigned v = 0; v < (1 << NI); v++) begin")
     add("      vec = v[NI-1:0];")
@@ -734,6 +742,13 @@ TBS := \\
 VERILATOR_FLAGS ?= --binary --timing -Wno-TIMESCALEMOD -Wno-DECLFILENAME
 IVERILOG_FLAGS  ?= -g2012
 
+# VCD=1 turns on waveform dumping. Each testbench then writes <tb>.vcd next to its
+# binary: build/vlt/<tb>/<tb>.vcd for Verilator, build/icarus/<tb>.vcd for Icarus.
+ifeq ($(VCD),1)
+VERILATOR_FLAGS += --trace +define+VCD
+IVERILOG_FLAGS  += -DVCD
+endif
+
 .DEFAULT_GOAL := help
 
 help: ## Show this help message
@@ -748,7 +763,7 @@ verilator: $(CELL_SRC) ## Run every testbench with Verilator
 \t\t\t\t$(MAKEFILE_DIR)$$tb.sv $(NETLIST) $(CELL_SRC) \\
 \t\t\t\t> $(BUILD)/vlt/$$tb.build.log 2>&1; then \\
 \t\t\techo "[BUILD-FAIL] $$tb"; cat $(BUILD)/vlt/$$tb.build.log; fail=1; continue; fi; \\
-\t\t$(BUILD)/vlt/$$tb/$$tb > $(BUILD)/vlt/$$tb.run.log 2>&1 || fail=1; \\
+\t\t( cd $(BUILD)/vlt/$$tb && ./$$tb ) > $(BUILD)/vlt/$$tb.run.log 2>&1 || fail=1; \\
 \t\tgrep -E '^\\[(PASS|FAIL)\\]' $(BUILD)/vlt/$$tb.run.log \\
 \t\t\t|| { echo "[NO-RESULT] $$tb"; cat $(BUILD)/vlt/$$tb.run.log; fail=1; }; \\
 \tdone; \\
@@ -763,7 +778,7 @@ icarus: $(CELL_SRC) ## Run every testbench with Icarus Verilog
 \t\t\t\t$(MAKEFILE_DIR)$$tb.sv $(NETLIST) $(CELL_SRC) \\
 \t\t\t\t> $(BUILD)/icarus/$$tb.build.log 2>&1; then \\
 \t\t\techo "[BUILD-FAIL] $$tb"; cat $(BUILD)/icarus/$$tb.build.log; fail=1; continue; fi; \\
-\t\tvvp $(BUILD)/icarus/$$tb.vvp > $(BUILD)/icarus/$$tb.run.log 2>&1 || fail=1; \\
+\t\t( cd $(BUILD)/icarus && vvp $$tb.vvp ) > $(BUILD)/icarus/$$tb.run.log 2>&1 || fail=1; \\
 \t\tgrep -E '^\\[(PASS|FAIL)\\]' $(BUILD)/icarus/$$tb.run.log \\
 \t\t\t|| { echo "[NO-RESULT] $$tb"; cat $(BUILD)/icarus/$$tb.run.log; fail=1; }; \\
 \tdone; \\
@@ -927,9 +942,24 @@ The paths the generator was given are baked in as overridable variables:
 | `CELL_SRC_IN` | `@CELLSRCLIST@` | simulation models for the standard cells |
 | `VERILATOR_FLAGS` | `--binary --timing -Wno-TIMESCALEMOD -Wno-DECLFILENAME` | |
 | `IVERILOG_FLAGS` | `-g2012` | |
+| `VCD` | unset | set to `1` to dump waveforms (see below) |
 
 Override any of them on the command line, e.g.
 `make all CELL_SRC_IN=/path/to/other_models.v`.
+
+### Waveforms
+
+Off by default. Build with `VCD=1` and each testbench dumps its full hierarchy:
+
+```bash
+make verilator VCD=1     # -> build/vlt/<tb>/<tb>.vcd
+make icarus    VCD=1     # -> build/icarus/<tb>.vcd
+```
+
+`VCD=1` adds `+define+VCD --trace` for Verilator and `-DVCD` for Icarus, which enables the
+`$dumpfile`/`$dumpvars` block in each testbench. Since the stimulus is a `#1`-per-vector sweep,
+vector *n* sits at time *n+1* ns, and `diff`/`correct` show exactly where a mismatch occurs.
+Note that a run is cached by its build directory, so switch `VCD` and the testbenches are rebuilt.
 
 `verilator` and `icarus` keep going after a failing testbench so one run reports every problem, and
 exit non-zero if any of them failed. Per-testbench compile and run logs are left in

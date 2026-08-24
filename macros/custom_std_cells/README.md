@@ -61,6 +61,24 @@ is newer than it.
 | `NETLIST` | `aion_cells.v` | netlist under test |
 | `TB_DIR` | `tb` | output directory |
 
+### Waveforms
+
+No VCD is written by default. Pass `VCD=1` to turn dumping on:
+
+```bash
+./run.sh "make -C macros/custom_std_cells verilator VCD=1"   # tb/build/vlt/<tb>/<tb>.vcd
+./run.sh "make -C macros/custom_std_cells icarus    VCD=1"   # tb/build/icarus/<tb>.vcd
+```
+
+That adds `+define+VCD --trace` for Verilator and `-DVCD` for Icarus, enabling the
+`$dumpfile`/`$dumpvars` block in each testbench, which dumps the whole hierarchy — stimulus,
+DUT internals, gold signals and `diff`. The sweep advances one vector per `#1`, so vector *n*
+is at time *n+1* ns. View them from the noVNC desktop:
+
+```bash
+./run.sh "gtkwave macros/custom_std_cells/tb/build/icarus/tb_AION_nand2_11.vcd"   # or surfer
+```
+
 A passing run prints one line per module per simulator, and exits non-zero if any module fails:
 
 ```
