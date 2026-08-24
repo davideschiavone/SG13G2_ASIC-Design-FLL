@@ -16,6 +16,8 @@ so that claim can be verified mechanically after every regeneration of the netli
 ├─ Makefile                # pre-fills the ihp-sg13g2 paths, drives the generator (tracked)
 ├─ 📁 scripts/
 │  └─ gen_cell_tb.py       # the generator (tracked)
+├─ 📁 custom_circuit_example/
+│  └─ aion_nand2_11_flat.spice   # worked CUSTOM= example: AION_nand2_11 as bare transistors
 └─ 📁 tb/                  # ENTIRELY GENERATED, git-ignored -- see .gitignore
    ├─ gold_functions.md    # per module: Liberty functions, gold equations, truth tables
    ├─ 📁 sv/               # tb_<module>.sv, Makefile, README.md, build/
@@ -141,6 +143,39 @@ Get it wrong and the generator refuses to emit, printing the exact `.subckt` lin
 subckt keeps the plain module name; the implementation from `aion_cells.v` is renamed
 `reference_<module>` in `tb/spice/reference_cells.spice`, so there is never any doubt which one a
 message refers to.
+
+#### Worked example — `custom_circuit_example/`
+
+`custom_circuit_example/aion_nand2_11_flat.spice` is a ready-to-run one: `AION_nand2_11` flattened
+to **transistors only** — no `sg13g2_*` subckts anywhere, just `sg13_lv_nmos`/`sg13_lv_pmos`
+devices forming the two NAND2 stages by hand. Run it:
+
+```bash
+./run.sh "make -C macros/custom_std_cells spice MODULE='AION_nand2_11' VCD=1 \
+            CUSTOM=custom_circuit_example/aion_nand2_11_flat.spice"
+```
+
+```
+  tb_AION_nand2_11                    3 in, 1 out, 8 vectors  3-way
+[PASS] AION_nand2_11 : 8/8 vectors match (3-way: gold, reference, custom)
+ngspice: all 1 testbenches passed
+```
+
+`CUSTOM=` resolves relative to this directory, so the short path works. The netlist includes
+nothing itself — the device models come from the deck it is included into. `VCD=1` leaves
+`tb/spice/build/tb_AION_nand2_11.vcd` carrying all three implementations (`g_o0`, `o0_ref`,
+`o0_cus`) side by side with all three mismatch flags (`c_gold_ref`, `c_gold_cus`, `c_ref_cus`).
+
+To watch the check bite, copy the file and break one connection — tying stage 2's PMOS **and**
+NMOS gates to `I2` instead of `w0` makes it compute `!I2`:
+
+```
+[FAIL] AION_nand2_11 : custom vs gold -- first mismatch at vector 7 (t=7.78e-09 s)
+[FAIL] AION_nand2_11 : custom vs reference -- first mismatch at vector 7 (t=7.78e-09 s)
+```
+
+Vector 7 is `I0=I1=I2=1`, the only one of the eight where `!I2` differs from `(I0 & I1) | !I2`, and
+`gold vs reference` stays silent — so the report points at the new circuit, not at `aion_cells.v`.
 
 ### Analog waveforms, the ngspice way
 
