@@ -182,7 +182,10 @@ DRIVER     ?=
 DRIVER_IN  ?= A
 DRIVER_OUT ?= X
 
-LIB_FLAGS := --cell $(LIB_CELL) --verilog $(NETLIST) --lib $(LIB) \
+# LIB= can be emptied to fall back to the Verilog-based function check, which needs the
+# cell models instead of the Liberty functions.
+LIB_FLAGS := --cell $(LIB_CELL) --verilog $(NETLIST) $(if $(LIB),--lib $(LIB),) \
+             $(addprefix --cell-verilog ,$(CELL_V)) \
              $(addprefix --cell-spice ,$(CELL_SP)) \
              --model-lib $(MODEL_LIB) \
              $(addprefix --corner ,$(CORNERS)) \

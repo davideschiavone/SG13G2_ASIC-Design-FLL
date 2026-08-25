@@ -438,22 +438,46 @@ in precedence order:
 | `--verilog FILE` | read from the module header and its `input`/`output` declarations. **Any** Verilog view works, behavioural included — the PDK's own `sg13g2_stdcell.v`, written with gate primitives, does. If the file is a *structural* netlist it additionally becomes the DUT for the functional check |
 | `--lib FILE` | Liberty declares `direction` per pin, so a library defining the cell answers it too |
 
-**`--lib` is an oracle, never a data source.** No timing, power or capacitance number is read from
-it. It supplies the `function` attribute that `gen_cell_tb.py` builds its gold model from, so the
-transistors get checked against an independent description of what they should compute, at every
-corner, before any measurement is believed. Drop it and the run still works — the function is
-measured either way — and both the console and `char_report.md` say the check was skipped.
+**Neither `--lib` nor `--verilog` contributes a single number** — they are *oracles*. What is being
+characterized is a transistor netlist, so any independent statement of what it should compute will
+do, and there are two. Both run at **every corner**, before any measurement is believed, and both
+are **fatal** on disagreement:
 
-The proof that nothing is copied: for `sg13g2_nand2_1` this tool emits `function : "!A+!B"` where
-IHP's library says `"!(A*B)"`. Same function, independently derived. Diffing the emitted cell group
-of a run *with* `--lib` against one with only `--inputs/--outputs` gives zero differences.
-
-So the true minimum, for a cell nobody has a Liberty for yet:
+| oracle | what it does |
+| --- | --- |
+| `--lib` | the strongest. `gen_cell_tb.py` builds a gold model from the Liberty `function` attributes and runs its exhaustive SPICE testbench, so the comparison happens on real analog waveforms at that corner's voltage and temperature. With a *structural* `--verilog` too, that deck becomes a **3-way** check: gold, the gate netlist, and this netlist |
+| `--verilog` | **no Liberty needed.** The Verilog view is elaborated with Icarus (leaf models from `--cell-verilog`), swept over every input combination, and compared against the truth table measured from the transistors. Behavioural or structural both work — the PDK's own `sg13g2_stdcell.v` does |
+| neither | the run still works and the function is still measured; console and `char_report.md` say the check was skipped |
 
 ```bash
-gen_cell_lib.py my_cell.spice --cell my_cell --inputs A,B --outputs Y \
-    --model-lib .../cornerMOSlv.lib --no-verify
+# no Liberty anywhere: the Verilog view is the oracle
+./run.sh 'python3 macros/custom_std_cells/scripts/gen_cell_lib.py \
+  macros/custom_std_cells/custom_circuit_example/aion_nand2_11_flat.spice \
+  --cell AION_nand2_11 --verilog macros/custom_std_cells/aion_cells.v \
+  --cell-verilog $PDK_ROOT/$PDK/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v \
+  --cell-verilog $PDK_ROOT/$PDK/libs.ref/sg13g2_stdcell/verilog/sg13g2_udp.v \
+  --model-lib $PDK_ROOT/$PDK/libs.tech/ngspice/models/cornerMOSlv.lib \
+  --lib-name AION_nand2_11 -o macros/custom_std_cells/lib'
+#   AION_nand2_11: [PASS] AION_nand2_11 : 8/8 vectors match (2-way: measured transistors, aion_cells.v)
 ```
+
+`make lib LIB=` does the same through the Makefile. A structural netlist needs its leaf cell models
+(`--cell-verilog`), including the UDP file — `sg13g2_stdcell.v` alone fails to elaborate with
+`ihp_latch referenced 3 times`.
+
+These checks have teeth. Rewiring one transistor of the worked example so it computes the wrong
+function is caught, named vector by vector, and fatal:
+
+```
+error: [FAIL] AION_nand2_11 : the measured truth table disagrees with aion_cells.v in 3 of 8 cases:
+  I0=0 I1=1 I2=0: O0 is 0 in the netlist, 1 in Verilog
+  I0=0 I1=0 I2=1: O0 is 1 in the netlist, 0 in Verilog
+```
+
+The proof that nothing is *copied* even when `--lib` is given: for `sg13g2_nand2_1` this tool emits
+`function : "!A+!B"` where IHP's library says `"!(A*B)"` — same function, independently derived —
+and diffing the emitted cell group of a run *with* `--lib` against one with only
+`--inputs/--outputs` gives zero differences.
 
 `--area` and `--footprint` are optional metadata: `area` defaults to 0 and only feeds area reports,
 and `cell_footprint` groups pin-compatible cells so synthesis may swap one for another
