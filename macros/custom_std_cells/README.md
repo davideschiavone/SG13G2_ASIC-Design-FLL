@@ -653,6 +653,54 @@ driver. Nobody agrees on this: lctime adds the full input-port energy and subtra
 at all, and its own source carries a *"TODO: what unit does rise_power have… is it really power or
 energy?"* next to a warning for the negative energies that convention produces.
 
+### Is the residual a simulation-accuracy problem? No — measured
+
+The obvious suspicion is that ~4% is numerical: too loose a tolerance, too few timesteps. It
+isn't. Re-running one generated arc deck (`sg13g2_nand2_1`, A→Y, slew 18.6 ps, load 1 fF) under a
+range of ngspice settings, in ps:
+
+| settings | cell_fall | fall_tr | cell_rise | rise_tr | wall | drift |
+| --- | --- | --- | --- | --- | --- | --- |
+| as generated (defaults) | 29.1278 | 19.4673 | 22.1375 | 14.0868 | 4.8 s | — |
+| `reltol=1e-4` | 29.1278 | 19.4673 | 22.1375 | 14.0868 | 5.0 s | 0.000% |
+| `reltol=1e-5 vntol=1e-9 abstol=1e-15` | 29.1274 | 19.4709 | 22.1374 | 14.0866 | 5.1 s | 0.018% |
+| + `chgtol=1e-16 trtol=1` | 29.1306 | 19.4716 | 22.1407 | 14.0901 | 5.3 s | 0.023% |
+| `method=gear` | 29.1174 | 19.4794 | 22.1272 | 14.0973 | 4.7 s | 0.075% |
+| gear + tight tolerances | 29.1170 | 19.4878 | 22.1303 | 14.1020 | 5.1 s | 0.108% |
+| timestep ÷10 | 29.1319 | 19.4626 | 22.1357 | 14.0696 | 46 s | 0.122% |
+| **IHP shipped** | **30.1493** | **19.0132** | **22.7180** | **14.3488** | | **3.4%** |
+
+Everything the solver can be asked to do moves the answer by **under 0.2%**, at up to 10× the
+runtime, while the gap to IHP is 3.4% — twenty times larger. Re-running the *whole grid* with
+`--spice-option 'reltol=1e-5 vntol=1e-9' --spice-option 'method=gear'` gives mean deviations of
+4.8 / 4.4 / 3.6% — identical to the defaults. The residual is the netlist and the stimulus
+convention, exactly as the sections above measured; it is not the integrator.
+
+(Pushing the timestep another 10× makes ngspice give up with `Timestep too small … trouble with
+node "ps_0"` — the B-source power probe — so that is the practical floor, well past the point of
+any return.)
+
+`--spice-option TEXT` adds a `.options` line to every deck, for an awkward cell that genuinely
+needs different settings, or to try alternatives like `klu`.
+
+### Is ngspice fast-SPICE or slow-SPICE?
+
+Slow — in the sense that matters here, which is that it is a **true SPICE**: one sparse
+matrix solve per Newton iteration over the whole circuit (it prints `Using SPARSE 1.3 as Direct
+Linear Solver` at startup; `klu` is available too), full Newton-Raphson to convergence at every
+timestep, and local-truncation-error step control. The devices are real compact models — IHP's
+PSP103 via OSDI, a surface-potential model — not table lookups.
+
+FastSPICE tools (CustomSim, FineSim, HSIM, Spectre XPS) get their 10–1000× by partitioning the
+netlist into weakly-coupled blocks, solving them semi-independently, exploiting latency so quiet
+blocks are not re-evaluated, and simplifying or tabulating device models. That is the right trade
+for simulating a million-transistor block; it is the wrong trade for characterizing one cell,
+where the whole point is a delay number accurate to a percent.
+
+So ngspice sits in the accurate class alongside HSPICE and Spectre for a circuit this size, and
+the numbers above show it is not the limiting factor. What limits accuracy here is what goes
+*into* it — parasitics in the netlist, and the shape of the stimulus.
+
 ### The same boundary, found and closed on input capacitance
 
 Where the pin charge stops being counted turned out to be measurable. On `sg13g2_inv_1`:

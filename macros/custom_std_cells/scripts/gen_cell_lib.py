@@ -208,7 +208,20 @@ run this was written from (typ corner, both arcs):
     leakage, per state    -1% to -38% depending on the state
 
 Timing is good to a few percent, and the residual is a smooth function of the grid rather
-than noise. Where the rest of it comes from is known rather than guessed --
+than noise.
+
+It is **not** a simulation-accuracy problem, which is the first thing to suspect. Re-running
+one generated arc deck under tighter tolerances (``reltol`` down to 1e-5 with ``vntol=1e-9``,
+``abstol=1e-15``, ``chgtol=1e-16``, ``trtol=1``), under Gear integration instead of
+trapezoidal, and with ten times the timesteps, moves the measured delays and transitions by
+**under 0.2%** in every case -- against a 3.4% gap to IHP. The whole grid re-run with
+``--spice-option 'reltol=1e-5 vntol=1e-9' --spice-option 'method=gear'`` gives mean
+deviations identical to the defaults. ngspice is a true SPICE here -- direct sparse solve,
+full Newton-Raphson per timestep, LTE step control, real PSP103 compact models through OSDI,
+none of the partitioning or table-lookup that makes a FastSPICE fast -- so it is the accurate
+end of the trade, and it is not what limits this. What limits it is what goes into it.
+
+Where the rest of it comes from is known rather than guessed --
 ``libs.ref/sg13g2_stdcell/doc/ReleaseNotes.txt`` says of Rev0.1.0 that the cells were
 "re-characterized with updated QRC tech file and 'buf_1' active driver setting for all
 input pins". So the reference was measured on a *parasitic-extracted* netlist, with every
@@ -644,6 +657,7 @@ class Ctx:
     corner: Corner
     input_ramp: str = "measured"
     driver: Driver | None = None
+    options: list[str] = field(default_factory=list)
 
     @property
     def vth_in(self) -> float:
@@ -713,6 +727,7 @@ def deck_header(what: str, ctx: Ctx) -> list[str]:
         ctx.models,
         *ctx.includes,
         "",
+        *[f".options {o}" for o in ctx.options],
         f".temp {_n(ctx.temp)}",
         "",
     ]
@@ -2395,6 +2410,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--check-sta", dest="check_sta", action="store_true", default=True,
                     help="read every emitted library back with OpenSTA (default)")
     ap.add_argument("--no-check-sta", dest="check_sta", action="store_false")
+    ap.add_argument("--spice-option", action="append", default=[], metavar="TEXT",
+                    help="extra '.options TEXT' line for every generated deck; repeat. The "
+                    "defaults are converged for this PDK (tightening reltol/abstol/vntol, or "
+                    "switching to method=gear, moves the measured delays by under 0.2%%), so "
+                    "this is for awkward cells and for trying things like 'klu'")
     ap.add_argument("--ngspice", default="ngspice", metavar="BIN")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 2), metavar="N")
     ap.add_argument("--timeout", type=float, default=1800.0, metavar="S")
@@ -2503,6 +2523,7 @@ def main(argv: list[str] | None = None) -> int:
             corner=corner,
             input_ramp=args.input_ramp,
             driver=driver,
+            options=args.spice_option,
         )
         workdir = outdir / "decks" / corner.tag
         print(f"[{corner.tag}] characterizing {len(cells)} cell(s) ...", flush=True)
